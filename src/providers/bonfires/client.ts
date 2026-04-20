@@ -141,7 +141,7 @@ export class BonfiresClient {
    */
   async updateLabels(bonfireId: string, runId: string): Promise<unknown> {
     const url =
-      `${this.apiUrl}/update_labels?bonfire_id=${encodeURIComponent(bonfireId)}` +
+      `${this.apiUrl}/vector_store/update_labels?bonfire_id=${encodeURIComponent(bonfireId)}` +
       `&run_id=${encodeURIComponent(runId)}`;
     const r = await this.fetchImpl(url, { method: "POST", headers: this.headers() });
     if (!r.ok) {
