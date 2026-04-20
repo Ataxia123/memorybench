@@ -139,14 +139,15 @@ export class BonfiresClient {
 
   buildOntology(
     bonfireId: string,
-    opts: { linkToGraph?: boolean } = {},
+    opts: { linkToGraph?: boolean; threshold?: number; topNCap?: number } = {},
   ): Promise<unknown> {
-    return this.req("POST", `/ontology/${bonfireId}/build`, {
+    const body: Record<string, unknown> = {
       entity_labels: null,
       link_to_graph: opts.linkToGraph ?? true,
-      threshold: null,
-      top_n_cap: null,
-    });
+    };
+    if (opts.threshold !== undefined) body.threshold = opts.threshold;
+    if (opts.topNCap !== undefined) body.top_n_cap = opts.topNCap;
+    return this.req("POST", `/ontology/${bonfireId}/build`, body);
   }
 
   async buildCommunities(bonfireId: string, sampleSize = 10): Promise<unknown> {
@@ -251,7 +252,7 @@ export class BonfiresClient {
    * written to `/tmp/bonfire-bootstrap-<id>.js` and an error is thrown that
    * tells the user to run it manually.
    */
-  async ensureBonfire(args: { bonfireId: string; name: string; primaryGrammar?: string }): Promise<void> {
+  async ensureBonfire(args: { bonfireId: string; name: string; primaryGrammar?: string }): Promise<string> {
     const hexId = isHex24(args.bonfireId) ? args.bonfireId : slugToObjectId(args.bonfireId);
     const name = args.name;
     const grammar = args.primaryGrammar ?? "locomo";
@@ -259,7 +260,7 @@ export class BonfiresClient {
     const script = `
 db.bonfires.updateOne(
   { _id: ObjectId("${hexId}") },
-  { \\$setOnInsert: {
+  { $setOnInsert: {
       type: "Bonfire",
       name: ${JSON.stringify(name)},
       purpose: "memorybench LoCoMo eval",
@@ -295,5 +296,6 @@ db.bonfires.updateOne(
         `Original error: ${String(err)}`,
       );
     }
+    return hexId;
   }
 }
