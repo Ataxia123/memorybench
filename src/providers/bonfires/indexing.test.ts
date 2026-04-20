@@ -3,7 +3,7 @@ import { runIndexingPipeline } from "./indexing.js";
 
 describe("runIndexingPipeline", () => {
   it(
-    "calls startSummaries → waitForJob → startTaxonomy → waitForJob → buildCommunities → buildOntology → createGrammar → seedGrammar in order",
+    "calls startSummaries → waitForJob → startTaxonomy → waitForJob → buildCommunities → createGrammar → seedGrammar in order",
     async () => {
       const order: string[] = [];
       const client = {
@@ -21,10 +21,6 @@ describe("runIndexingPipeline", () => {
         }),
         buildCommunities: mock(async () => {
           order.push("buildCommunities");
-          return {};
-        }),
-        buildOntology: mock(async () => {
-          order.push("buildOntology");
           return {};
         }),
         createGrammar: mock(async () => {
@@ -47,7 +43,6 @@ describe("runIndexingPipeline", () => {
         "startTaxonomy",
         "wait:taxonomy",
         "buildCommunities",
-        "buildOntology",
         "createGrammar",
         "seedGrammar",
       ]);
@@ -62,7 +57,6 @@ describe("runIndexingPipeline", () => {
       waitForJob: mock(async () => ({ state: "completed" as const })),
       startTaxonomy: mock(async () => ({ job_id: "t1" })),
       buildCommunities: mock(async () => ({})),
-      buildOntology: mock(async () => ({})),
       createGrammar: mock(async (args: unknown) => {
         createGrammarArgs.push(args);
         return {};
