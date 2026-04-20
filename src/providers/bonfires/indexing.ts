@@ -1,33 +1,51 @@
 import type { BonfiresClient } from "./client.js";
 
+/**
+ * Run the full post-ingest indexing pipeline for a bonfire.
+ *
+ * Order (matches whodunit):
+ *   startSummaries → waitForJob
+ *   startTaxonomy  → waitForJob
+ *   buildCommunities
+ *   buildOntology
+ *   createGrammar + seedGrammar
+ *
+ * NOTE: stack_process is intentionally absent here — ingestSessions already
+ * calls it per session so each session becomes its own KG episode.
+ */
 export async function runIndexingPipeline(args: {
   client: BonfiresClient;
   agentId: string;
   bonfireId: string;
+  grammarName?: string;
+  seedQuery?: string;
 }): Promise<void> {
-  const { client, agentId, bonfireId } = args;
+  const { client, bonfireId } = args;
+  const grammarName = args.grammarName ?? "locomo";
+  const seedQuery = args.seedQuery ?? "people places events topics";
 
-  // 1. Build the KG from the agent's stack.
-  const { task_id } = await client.stackProcess(agentId);
-  await client.waitForJob(task_id, { kind: "stack_processing", timeoutSec: 1800 });
+  // 1. Summaries over ingested chunks
+  const summaries = await client.startSummaries(bonfireId);
+  await client.waitForJob(summaries.job_id, { kind: "summaries", timeoutSec: 1800 });
 
-  // 2. Cluster entities into taxonomies.
+  // 2. Taxonomy
   const taxonomy = await client.startTaxonomy(bonfireId);
   await client.waitForJob(taxonomy.job_id, { kind: "taxonomy", timeoutSec: 1800 });
 
-  // 3. Detect communities (Leiden) — must run BEFORE ontology build.
+  // 3. Communities (prerequisite for ontology)
   await client.buildCommunities(bonfireId);
 
-  // 4. Build ontology — wires :OntologyLabel nodes + :BELONGS_TO edges.
-  //    Requires taxonomies + communities to exist.
+  // 4. Ontology — wires :OntologyLabel nodes + :BELONGS_TO edges
   await client.buildOntology(bonfireId, { linkToGraph: true });
 
-  // 5. Build the trimtab grammar last — cascade needs ontology-linked
-  //    entities to walk usefully for the smart arm.
-  const grammar = (await client.buildGrammar(bonfireId)) as { entities?: number };
-  if ((grammar.entities ?? 0) === 0) {
-    console.warn(
-      "bonfires provider: build_grammar returned 0 entities — smart arm will degrade to cascade-less search",
-    );
-  }
+  // 5. Grammar: create + seed (not build_grammar — fresh bonfires don't have
+  //    KG-UUID-linked taxonomies, so we seed from a KG query instead)
+  await client.createGrammar({ bonfireId, grammar: grammarName });
+  await client.seedGrammar({
+    bonfireId,
+    grammar: grammarName,
+    rule: "entities",
+    kgQuery: seedQuery,
+    numEntities: 30,
+  });
 }

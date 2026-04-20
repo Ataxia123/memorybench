@@ -5,8 +5,12 @@ export interface DelveAgent {
 }
 
 export interface StackMessage {
-  role: string
-  content: string
+  id: string
+  text: string
+  userId: string
+  chatId: string
+  timestamp: string   // ISO 8601
+  role: string        // "user" in whodunit; kept flexible
 }
 
 export interface JobStatus {

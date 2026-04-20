@@ -23,24 +23,74 @@ describe("BonfiresClient", () => {
     });
   });
 
-  it("stackAdd posts messages to /agents/{id}/stack/add", async () => {
+  it("stackAdd posts whodunit-shaped messages to /agents/{id}/stack/add", async () => {
     const fetchMock = mock(async () => ({
       ok: true,
       status: 200,
-      json: async () => ({ added: 2 }),
+      json: async () => ({ added: 1 }),
       text: async () => "",
     }));
     const client = new BonfiresClient({
       apiUrl: "http://localhost:8000",
       fetchImpl: fetchMock as unknown as typeof fetch,
     });
-    await client.stackAdd("agent-123", [
-      { role: "user", content: "hello" },
-      { role: "assistant", content: "hi" },
-    ]);
+    const msg = {
+      id: "s1-0",
+      text: "[user]: hi\n[assistant]: hello",
+      userId: "agent-abc",
+      chatId: "bf-000000000000000000000001",
+      timestamp: "2026-01-01T00:00:00.000Z",
+      role: "user",
+    };
+    await client.stackAdd("agent-123", [msg]);
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("http://localhost:8000/agents/agent-123/stack/add");
-    expect(JSON.parse((init as RequestInit).body as string).messages).toHaveLength(2);
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body.messages).toHaveLength(1);
+    expect(body.messages[0]).toMatchObject({ id: "s1-0", text: expect.any(String), userId: "agent-abc" });
+  });
+
+  it("ingestContent posts to /ingest_content", async () => {
+    const fetchMock = mock(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true }),
+      text: async () => "",
+    }));
+    const client = new BonfiresClient({
+      apiUrl: "http://localhost:8000",
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
+    await client.ingestContent({ bonfireId: "bf-1", content: "hello world", title: "test-doc" });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("http://localhost:8000/ingest_content");
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body).toMatchObject({ bonfire_id: "bf-1", content: "hello world", title: "test-doc" });
+  });
+
+  it("seedGrammar builds correct query-string URL", async () => {
+    const fetchMock = mock(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ seeded: 30 }),
+    }));
+    const client = new BonfiresClient({
+      apiUrl: "http://localhost:8000",
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
+    await client.seedGrammar({
+      bonfireId: "bf-1",
+      grammar: "locomo",
+      rule: "entities",
+      kgQuery: "people places events",
+      numEntities: 30,
+    });
+    const [url] = fetchMock.mock.calls[0];
+    expect(url as string).toContain("/trimtabs/grammars/bf-1/seed");
+    expect(url as string).toContain("grammar=locomo");
+    expect(url as string).toContain("rule=entities");
+    expect(url as string).toContain("kg_query=people");
+    expect(url as string).toContain("num_entities=30");
   });
 
   it("findOrCreateAgent falls back to list on 409", async () => {

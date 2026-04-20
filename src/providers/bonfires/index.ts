@@ -40,6 +40,14 @@ export class BonfiresProvider implements Provider {
     this.client = new BonfiresClient({ apiUrl: this.config.apiUrl, apiKey: this.config.apiKey })
     await this.client.healthz()
 
+    // Bootstrap the bonfire document in MongoDB before creating the agent,
+    // so the agent's bonfireId reference is valid.
+    await this.client.ensureBonfire({
+      bonfireId: this.config.bonfireId,
+      name: `memorybench-${this.config.bonfireId}`,
+      primaryGrammar: "locomo",
+    })
+
     const agent = await this.client.findOrCreateAgent({
       bonfireId: this.config.bonfireId,
       name: `memorybench-${this.config.bonfireId}`,
@@ -48,7 +56,7 @@ export class BonfiresProvider implements Provider {
   }
 
   async ingest(sessions: UnifiedSession[], _options: IngestOptions): Promise<IngestResult> {
-    return ingestSessions({ client: this.client, agentId: this.agentId, sessions })
+    return ingestSessions({ client: this.client, agentId: this.agentId, bonfireId: this.config.bonfireId, sessions })
   }
 
   async awaitIndexing(

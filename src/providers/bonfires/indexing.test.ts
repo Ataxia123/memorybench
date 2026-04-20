@@ -1,68 +1,87 @@
-import { describe, it, expect, mock, spyOn } from "bun:test";
+import { describe, it, expect, mock } from "bun:test";
 import { runIndexingPipeline } from "./indexing.js";
 
 describe("runIndexingPipeline", () => {
-  it("calls stackProcess → taxonomy → buildCommunities → buildOntology → buildGrammar in order", async () => {
-    const order: string[] = [];
-    const client = {
-      stackProcess: mock(async () => {
-        order.push("stackProcess");
-        return { task_id: "s1" };
-      }),
-      waitForJob: mock(async (_id: string, opts: { kind: string }) => {
-        order.push(`wait:${opts.kind}`);
-        return { state: "completed" as const };
-      }),
-      startTaxonomy: mock(async () => {
-        order.push("startTaxonomy");
-        return { job_id: "t1" };
-      }),
-      buildCommunities: mock(async () => {
-        order.push("buildCommunities");
-        return {};
-      }),
-      buildOntology: mock(async () => {
-        order.push("buildOntology");
-        return {};
-      }),
-      buildGrammar: mock(async () => {
-        order.push("buildGrammar");
-        return { entities: 10 };
-      }),
-    };
-    await runIndexingPipeline({
-      client: client as unknown as Parameters<typeof runIndexingPipeline>[0]["client"],
-      agentId: "agent-1",
-      bonfireId: "bf-1",
-    });
-    expect(order).toEqual([
-      "stackProcess",
-      "wait:stack_processing",
-      "startTaxonomy",
-      "wait:taxonomy",
-      "buildCommunities",
-      "buildOntology",
-      "buildGrammar",
-    ]);
-  });
+  it(
+    "calls startSummaries → waitForJob → startTaxonomy → waitForJob → buildCommunities → buildOntology → createGrammar → seedGrammar in order",
+    async () => {
+      const order: string[] = [];
+      const client = {
+        startSummaries: mock(async () => {
+          order.push("startSummaries");
+          return { job_id: "sum1" };
+        }),
+        waitForJob: mock(async (_id: string, opts: { kind: string }) => {
+          order.push(`wait:${opts.kind}`);
+          return { state: "completed" as const };
+        }),
+        startTaxonomy: mock(async () => {
+          order.push("startTaxonomy");
+          return { job_id: "t1" };
+        }),
+        buildCommunities: mock(async () => {
+          order.push("buildCommunities");
+          return {};
+        }),
+        buildOntology: mock(async () => {
+          order.push("buildOntology");
+          return {};
+        }),
+        createGrammar: mock(async () => {
+          order.push("createGrammar");
+          return {};
+        }),
+        seedGrammar: mock(async () => {
+          order.push("seedGrammar");
+          return {};
+        }),
+      };
+      await runIndexingPipeline({
+        client: client as unknown as Parameters<typeof runIndexingPipeline>[0]["client"],
+        agentId: "agent-1",
+        bonfireId: "bf-1",
+      });
+      expect(order).toEqual([
+        "startSummaries",
+        "wait:summaries",
+        "startTaxonomy",
+        "wait:taxonomy",
+        "buildCommunities",
+        "buildOntology",
+        "createGrammar",
+        "seedGrammar",
+      ]);
+    },
+  );
 
-  it("logs warning but does not throw when buildGrammar returns 0 entities", async () => {
-    const warn = spyOn(console, "warn").mockImplementation(() => {});
+  it("passes grammarName and seedQuery through to createGrammar and seedGrammar", async () => {
+    const createGrammarArgs: unknown[] = [];
+    const seedGrammarArgs: unknown[] = [];
     const client = {
-      stackProcess: mock(async () => ({ task_id: "s1" })),
+      startSummaries: mock(async () => ({ job_id: "s1" })),
       waitForJob: mock(async () => ({ state: "completed" as const })),
       startTaxonomy: mock(async () => ({ job_id: "t1" })),
       buildCommunities: mock(async () => ({})),
       buildOntology: mock(async () => ({})),
-      buildGrammar: mock(async () => ({ entities: 0 })),
+      createGrammar: mock(async (args: unknown) => {
+        createGrammarArgs.push(args);
+        return {};
+      }),
+      seedGrammar: mock(async (args: unknown) => {
+        seedGrammarArgs.push(args);
+        return {};
+      }),
     };
     await runIndexingPipeline({
       client: client as unknown as Parameters<typeof runIndexingPipeline>[0]["client"],
       agentId: "a",
       bonfireId: "b",
+      grammarName: "my-grammar",
+      seedQuery: "characters and events",
     });
-    expect(warn.mock.calls.length).toBe(1);
-    expect(warn.mock.calls[0][0]).toContain("0 entities");
-    warn.mockRestore();
+    expect((createGrammarArgs[0] as { grammar: string }).grammar).toBe("my-grammar");
+    expect((seedGrammarArgs[0] as { kgQuery: string }).kgQuery).toBe("characters and events");
+    expect((seedGrammarArgs[0] as { rule: string }).rule).toBe("entities");
+    expect((seedGrammarArgs[0] as { numEntities: number }).numEntities).toBe(30);
   });
 });
