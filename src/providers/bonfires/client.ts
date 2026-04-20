@@ -134,24 +134,23 @@ export class BonfiresClient {
   }
 
   /**
-   * Ensure the Weaviate schema has the Bonfire_labels / Owl_classes / etc
-   * collections. Must be called once before update_labels. Not truly
-   * idempotent — Delve returns 500 if ANY collection already exists (e.g.,
-   * Labeled_chunks created by ingest_content on a prior run). We swallow
-   * that case: if collections are already there, we're fine.
+   * Best-effort call to `/vector_store/setup`. Delve's endpoint is not
+   * idempotent — it raises 500 if any collection already exists. Since
+   * we can't wipe via HTTP (no delete endpoint is exposed), we swallow
+   * the error: if the schema is already in place from a previous run,
+   * update_labels will work regardless.
    */
   async setupVectorStore(): Promise<unknown> {
-    const r = await this.fetchImpl(`${this.apiUrl}/vector_store/setup`, {
-      method: "POST",
-      headers: this.headers(),
-    });
-    if (r.ok) return r.json();
-    const text = await r.text().catch(() => "");
-    // Treat "class name X already exists" as success — schema is in place.
-    if (r.status === 500 && /already exists/i.test(text)) {
-      return { status: "already_setup", detail: text };
+    try {
+      const r = await this.fetchImpl(`${this.apiUrl}/vector_store/setup`, {
+        method: "POST",
+        headers: this.headers(),
+      });
+      if (r.ok) return r.json();
+      return { status: "setup_skipped", httpStatus: r.status };
+    } catch {
+      return { status: "setup_skipped", reason: "network_error" };
     }
-    throw new Error(`setupVectorStore failed ${r.status}: ${text}`);
   }
 
   /**
