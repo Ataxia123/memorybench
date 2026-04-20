@@ -133,6 +133,24 @@ export class BonfiresClient {
     });
   }
 
+  /**
+   * Trigger VectorStoreService.update_labels_for_run. Creates a TaxonomyLabel
+   * KG entity for each taxonomy without a uuid and saves the uuid back to
+   * Mongo — the actual mechanism that populates Taxonomy.uuid. Takes the
+   * TAXONOMY run_id (not a bonfire run_ref).
+   */
+  async updateLabels(bonfireId: string, runId: string): Promise<unknown> {
+    const url =
+      `${this.apiUrl}/update_labels?bonfire_id=${encodeURIComponent(bonfireId)}` +
+      `&run_id=${encodeURIComponent(runId)}`;
+    const r = await this.fetchImpl(url, { method: "POST", headers: this.headers() });
+    if (!r.ok) {
+      const text = await r.text().catch(() => "");
+      throw new Error(`updateLabels failed ${r.status}: ${text}`);
+    }
+    return r.json();
+  }
+
   buildGrammar(bonfireId: string, dryRun = false): Promise<unknown> {
     return this.req("POST", `/trimtabs/grammars/${bonfireId}/build`, { dry_run: dryRun });
   }
