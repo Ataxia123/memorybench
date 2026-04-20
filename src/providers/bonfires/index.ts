@@ -40,17 +40,25 @@ export class BonfiresProvider implements Provider {
     this.client = new BonfiresClient({ apiUrl: this.config.apiUrl, apiKey: this.config.apiKey })
     await this.client.healthz()
 
+    // Ensure Weaviate has the Bonfire_labels / Owl_classes collections.
+    // Idempotent — safe to call on every run. Required before update_labels.
+    await this.client.setupVectorStore()
+
     // Bootstrap the bonfire document in MongoDB before creating the agent,
     // so the agent's bonfireId reference is valid.
-    await this.client.ensureBonfire({
-      bonfireId: this.config.bonfireId,
-      name: `memorybench-${this.config.bonfireId}`,
+    // ensureBonfire returns the resolved 24-char hex ObjectId (slug → SHA-1 if needed).
+    const originalSlug = this.config.bonfireId
+    const resolvedBonfireId = await this.client.ensureBonfire({
+      bonfireId: originalSlug,
+      name: `memorybench-${originalSlug}`,
       primaryGrammar: "locomo",
     })
+    // Always use the hex form for all subsequent API calls (Delve requires a valid ObjectId).
+    this.config = { ...this.config, bonfireId: resolvedBonfireId }
 
     const agent = await this.client.findOrCreateAgent({
-      bonfireId: this.config.bonfireId,
-      name: `memorybench-${this.config.bonfireId}`,
+      bonfireId: resolvedBonfireId,
+      name: `memorybench-${originalSlug}`,
     })
     this.agentId = agent.id
   }

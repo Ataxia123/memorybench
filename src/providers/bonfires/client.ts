@@ -134,6 +134,23 @@ export class BonfiresClient {
   }
 
   /**
+   * Ensure the Weaviate schema has the Bonfire_labels / Owl_classes / etc
+   * collections. Must be called once before update_labels. Safe to call
+   * repeatedly — idempotent.
+   */
+  async setupVectorStore(): Promise<unknown> {
+    const r = await this.fetchImpl(`${this.apiUrl}/vector_store/setup`, {
+      method: "POST",
+      headers: this.headers(),
+    });
+    if (!r.ok) {
+      const text = await r.text().catch(() => "");
+      throw new Error(`setupVectorStore failed ${r.status}: ${text}`);
+    }
+    return r.json();
+  }
+
+  /**
    * Trigger VectorStoreService.update_labels_for_run. Creates a TaxonomyLabel
    * KG entity for each taxonomy without a uuid and saves the uuid back to
    * Mongo — the actual mechanism that populates Taxonomy.uuid. Takes the
