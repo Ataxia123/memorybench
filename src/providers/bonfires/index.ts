@@ -9,6 +9,9 @@ import type {
 import type { UnifiedSession } from "../../types/unified.js"
 import { BonfiresClient } from "./client.js"
 import type { BonfiresConfig } from "./types.js"
+import { ingestSessions } from "./ingest.js"
+import { runIndexingPipeline } from "./indexing.js"
+import { armSearch } from "./search.js"
 
 export class BonfiresProvider implements Provider {
   name = "bonfires"
@@ -17,26 +20,54 @@ export class BonfiresProvider implements Provider {
   private agentId!: string
 
   async initialize(config: ProviderConfig): Promise<void> {
-    throw new Error("not implemented")
+    // getProviderConfig("bonfires") returns { apiKey, apiUrl, arm, bonfireId }
+    // via ProviderConfig's [key: string]: unknown index signature.
+    const apiUrl = config.apiUrl as string | undefined
+    const arm = config.arm as BonfiresConfig["arm"] | undefined
+    const bonfireId = config.bonfireId as string | undefined
+
+    if (!apiUrl || !arm || !bonfireId) {
+      throw new Error("bonfires provider requires { apiUrl, arm, bonfireId } in config")
+    }
+
+    this.config = {
+      apiUrl,
+      apiKey: config.apiKey || undefined,
+      arm,
+      bonfireId,
+    }
+
+    this.client = new BonfiresClient({ apiUrl: this.config.apiUrl, apiKey: this.config.apiKey })
+    await this.client.healthz()
+
+    const agent = await this.client.findOrCreateAgent({
+      bonfireId: this.config.bonfireId,
+      name: `memorybench-${this.config.bonfireId}`,
+    })
+    this.agentId = agent.id
   }
 
-  async ingest(sessions: UnifiedSession[], options: IngestOptions): Promise<IngestResult> {
-    throw new Error("not implemented")
+  async ingest(sessions: UnifiedSession[], _options: IngestOptions): Promise<IngestResult> {
+    return ingestSessions({ client: this.client, agentId: this.agentId, sessions })
   }
 
   async awaitIndexing(
-    result: IngestResult,
-    containerTag: string,
-    onProgress?: IndexingProgressCallback
+    _result: IngestResult,
+    _containerTag: string,
+    _onProgress?: IndexingProgressCallback
   ): Promise<void> {
-    throw new Error("not implemented")
+    await runIndexingPipeline({
+      client: this.client,
+      agentId: this.agentId,
+      bonfireId: this.config.bonfireId,
+    })
   }
 
-  async search(query: string, options: SearchOptions): Promise<unknown[]> {
-    throw new Error("not implemented")
+  async search(query: string, _options: SearchOptions): Promise<unknown[]> {
+    return armSearch({ client: this.client, query, config: this.config })
   }
 
-  async clear(containerTag: string): Promise<void> {
+  async clear(_containerTag: string): Promise<void> {
     // local-only setup: no-op. Users drop state manually between runs.
   }
 }
