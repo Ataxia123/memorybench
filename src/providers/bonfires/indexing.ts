@@ -39,10 +39,13 @@ export async function runIndexingPipeline(args: {
     timeoutSec: 1800,
   });
 
-  const taxonomyRunId = (taxonomyJob.result as { run_id?: string } | undefined)?.run_id;
+  // The API wraps the actual job output in metadata.result — not result directly.
+  const taxonomyResult = (taxonomyJob.metadata as { result?: { run_id?: string } } | undefined)
+    ?.result;
+  const taxonomyRunId = taxonomyResult?.run_id;
   if (!taxonomyRunId) {
     throw new Error(
-      `taxonomy job ${taxonomy.job_id} returned no run_id in result — cannot update labels`,
+      `taxonomy job ${taxonomy.job_id} returned no run_id in metadata.result — cannot update labels`,
     );
   }
   await client.updateLabels(bonfireId, taxonomyRunId);

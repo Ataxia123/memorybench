@@ -16,7 +16,13 @@ export interface StackMessage {
 export interface JobStatus {
   state: "pending" | "running" | "completed" | "failed" | "cancelled"
   error?: string
+  // Legacy top-level result — used by some callers. The actual workflow
+  // output usually lives under metadata.result instead.
   result?: unknown
+  metadata?: {
+    job_uuid?: string
+    result?: Record<string, unknown>
+  }
 }
 
 export interface VectorSearchResult {

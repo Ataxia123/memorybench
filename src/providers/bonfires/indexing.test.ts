@@ -14,7 +14,7 @@ describe("runIndexingPipeline", () => {
         waitForJob: mock(async (_id: string, opts: { kind: string }) => {
           order.push(`wait:${opts.kind}`);
           return opts.kind === "taxonomy"
-            ? { state: "completed" as const, result: { run_id: "run-xyz" } }
+            ? { state: "completed" as const, metadata: { result: { run_id: "run-xyz" } } }
             : { state: "completed" as const };
         }),
         startTaxonomy: mock(async () => {
@@ -56,7 +56,7 @@ describe("runIndexingPipeline", () => {
       startSummaries: mock(async () => ({ job_id: "sum1" })),
       waitForJob: mock(async (_id: string, opts: { kind: string }) => {
         return opts.kind === "taxonomy"
-          ? { state: "completed" as const, result: {} }
+          ? { state: "completed" as const, metadata: { result: {} } }
           : { state: "completed" as const };
       }),
       startTaxonomy: mock(async () => ({ job_id: "tax1" })),
@@ -79,7 +79,7 @@ describe("runIndexingPipeline", () => {
       startSummaries: mock(async () => ({ job_id: "sum1" })),
       waitForJob: mock(async (_id: string, opts: { kind: string }) => {
         return opts.kind === "taxonomy"
-          ? { state: "completed" as const, result: { run_id: "tax-run-42" } }
+          ? { state: "completed" as const, metadata: { result: { run_id: "tax-run-42" } } }
           : { state: "completed" as const };
       }),
       startTaxonomy: mock(async () => ({ job_id: "tax1" })),
