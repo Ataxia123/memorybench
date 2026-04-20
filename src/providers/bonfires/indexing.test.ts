@@ -2,7 +2,7 @@ import { describe, it, expect, mock, spyOn } from "bun:test";
 import { runIndexingPipeline } from "./indexing.js";
 
 describe("runIndexingPipeline", () => {
-  it("calls stackProcess → taxonomy → labeling → buildGrammar → buildCommunities in order", async () => {
+  it("calls stackProcess → taxonomy → buildCommunities → buildOntology → buildGrammar in order", async () => {
     const order: string[] = [];
     const client = {
       stackProcess: mock(async () => {
@@ -17,17 +17,17 @@ describe("runIndexingPipeline", () => {
         order.push("startTaxonomy");
         return { job_id: "t1" };
       }),
-      startLabeling: mock(async () => {
-        order.push("startLabeling");
-        return { job_id: "l1" };
+      buildCommunities: mock(async () => {
+        order.push("buildCommunities");
+        return {};
+      }),
+      buildOntology: mock(async () => {
+        order.push("buildOntology");
+        return {};
       }),
       buildGrammar: mock(async () => {
         order.push("buildGrammar");
         return { entities: 10 };
-      }),
-      buildCommunities: mock(async () => {
-        order.push("buildCommunities");
-        return {};
       }),
     };
     await runIndexingPipeline({
@@ -40,10 +40,9 @@ describe("runIndexingPipeline", () => {
       "wait:stack_processing",
       "startTaxonomy",
       "wait:taxonomy",
-      "startLabeling",
-      "wait:labeling",
-      "buildGrammar",
       "buildCommunities",
+      "buildOntology",
+      "buildGrammar",
     ]);
   });
 
@@ -53,9 +52,9 @@ describe("runIndexingPipeline", () => {
       stackProcess: mock(async () => ({ task_id: "s1" })),
       waitForJob: mock(async () => ({ state: "completed" as const })),
       startTaxonomy: mock(async () => ({ job_id: "t1" })),
-      startLabeling: mock(async () => ({ job_id: "l1" })),
-      buildGrammar: mock(async () => ({ entities: 0 })),
       buildCommunities: mock(async () => ({})),
+      buildOntology: mock(async () => ({})),
+      buildGrammar: mock(async () => ({ entities: 0 })),
     };
     await runIndexingPipeline({
       client: client as unknown as Parameters<typeof runIndexingPipeline>[0]["client"],

@@ -120,6 +120,18 @@ export class BonfiresClient {
     return this.req("POST", `/trimtabs/grammars/${bonfireId}/build`, { dry_run: dryRun });
   }
 
+  buildOntology(
+    bonfireId: string,
+    opts: { linkToGraph?: boolean } = {},
+  ): Promise<unknown> {
+    return this.req("POST", `/ontology/${bonfireId}/build`, {
+      entity_labels: null,
+      link_to_graph: opts.linkToGraph ?? true,
+      threshold: null,
+      top_n_cap: null,
+    });
+  }
+
   async buildCommunities(bonfireId: string, sampleSize = 10): Promise<unknown> {
     const url = `${this.apiUrl}/knowledge_graph/communities/build?bonfire_id=${encodeURIComponent(
       bonfireId,
