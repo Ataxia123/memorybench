@@ -1,0 +1,43 @@
+export interface DelveAgent {
+  id: string
+  name: string
+  bonfireId: string
+}
+
+export interface StackMessage {
+  role: string
+  content: string
+}
+
+export interface JobStatus {
+  state: "pending" | "running" | "completed" | "failed" | "cancelled"
+  error?: string
+  result?: unknown
+}
+
+export interface VectorSearchResult {
+  text: string
+  score: number | null
+  id?: string
+  doc_snippet?: string
+}
+
+export interface KgDelveEdge {
+  fact: string
+  score?: number
+  uuid?: string
+}
+
+export interface KgDelveResult {
+  edges?: KgDelveEdge[]
+  nodes?: Array<{ name: string; summary?: string; uuid?: string }>
+}
+
+export type BonfiresArm = "vector" | "graph" | "smart"
+
+export interface BonfiresConfig {
+  apiUrl: string
+  apiKey?: string
+  arm: BonfiresArm
+  bonfireId: string
+}
