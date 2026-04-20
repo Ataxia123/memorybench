@@ -14,6 +14,7 @@ export class OpenAIJudge implements Judge {
   async initialize(config: JudgeConfig): Promise<void> {
     this.client = createOpenAI({
       apiKey: config.apiKey,
+      baseURL: process.env.OPENAI_BASE_URL,
     })
     const modelAlias = config.model || DEFAULT_JUDGE_MODELS.openai
     this.modelConfig = getModelConfig(modelAlias)
