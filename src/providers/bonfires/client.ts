@@ -48,7 +48,7 @@ export class BonfiresClient {
     return h;
   }
 
-  private async req<T>(method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
+  private async req<T>(method: "GET" | "POST" | "PUT" | "DELETE", path: string, body?: unknown): Promise<T> {
     const r = await this.fetchImpl(`${this.apiUrl}${path}`, {
       method,
       headers: this.headers(),
@@ -93,6 +93,85 @@ export class BonfiresClient {
 
   stackProcess(agentId: string): Promise<{ task_id: string }> {
     return this.req("POST", `/agents/${agentId}/stack/process`);
+  }
+
+  /** Create an episode directly via Graphiti, bypassing stack_service's
+   * LLM summarization of the transcript. Returns an arq task_id that can be
+   * polled via waitForJob. Required for LoCoMo-style benchmarks where the
+   * answer depends on specific quoted dialog text — stack_service's
+   * _extract_episode_with_llm compresses dialog into a summary before
+   * graphiti extraction, dropping verbatim claims.
+   */
+  /** GET /ontology/{bonfire_id} — read the current ontology (empty shape
+   * if none exists). Used to merge fallback generic types into a
+   * LLM-derived ontology before PUTting back. */
+  getOntology(
+    bonfireId: string,
+  ): Promise<{
+    bonfire_id: string;
+    entity_labels: Array<{ name: string; description: string; labels: string[]; fields: Record<string, unknown> }>;
+    edge_labels: Array<{ name: string; description: string; labels: string[]; fields: Record<string, unknown> }>;
+  }> {
+    return this.req("GET", `/ontology/${bonfireId}`);
+  }
+
+  /** PUT /ontology/{bonfire_id} — set (overwrite) the bonfire's Ontology
+   * Mongo doc. Use before running the indexing pipeline when you want a
+   * specific curated entity-type set to guide graphiti's extraction,
+   * rather than letting `derive_from_taxonomy` LLM-invent types. */
+  setOntology(
+    bonfireId: string,
+    entityLabels: Array<{ name: string; description?: string }>,
+  ): Promise<unknown> {
+    return this.req("PUT", `/ontology/${bonfireId}`, {
+      entity_labels: entityLabels.map((l) => ({
+        name: l.name,
+        description: l.description ?? "",
+        labels: [l.name],
+        fields: {},
+      })),
+      edge_labels: [],
+    });
+  }
+
+  /** Cascaded trimtab grammar search. Returns the walk text + expansion ids.
+   * In cascaded mode (`rule` omitted) this walks origin → ...leaf and yields
+   * a single generated string we can use to enrich a downstream vector
+   * query — the whodunit "trimtabbed_vector" pattern: grammar as a prior
+   * that injects role-relevant vocabulary into the query. */
+  async searchGrammar(args: {
+    bonfireId: string;
+    grammar: string;
+    query: string;
+    topK?: number;
+  }): Promise<{ mode: string; grammar: string; text?: string } & Record<string, unknown>> {
+    return await this.req(
+      "POST",
+      `/trimtabs/grammars/${args.bonfireId}/search`,
+      {
+        query: args.query,
+        grammar: args.grammar,
+        top_k: args.topK ?? 3,
+        expand: false,
+      },
+    );
+  }
+
+  createEpisodeDirect(args: {
+    bonfireId: string;
+    name: string;
+    episodeBody: string;
+    referenceTime?: string;
+  }): Promise<{ success: boolean; task_id: string; status: string }> {
+    const body: Record<string, unknown> = {
+      bonfire_id: args.bonfireId,
+      name: args.name,
+      episode_body: args.episodeBody,
+      source: "message",
+      source_description: "memorybench_direct",
+    };
+    if (args.referenceTime) body.reference_time = args.referenceTime;
+    return this.req("POST", "/knowledge_graph/episode/create", body);
   }
 
   jobStatus(jobId: string): Promise<JobStatus> {
@@ -177,7 +256,20 @@ export class BonfiresClient {
 
   buildOntology(
     bonfireId: string,
-    opts: { linkToGraph?: boolean; threshold?: number; topNCap?: number } = {},
+    opts: {
+      linkToGraph?: boolean;
+      threshold?: number;
+      topNCap?: number;
+      extendGrammar?: string;
+      grammarMinMentions?: number;
+      grammarMinRelations?: number;
+      /** "cosine" (default) matches communities to ontology via embedding
+       * similarity. "structural" counts ontology-label instances among
+       * each community's :Entity members and links to the dominant label
+       * — deterministic, noise-free, but requires graphiti ran with
+       * ontology-guided entity_types. */
+      linkMethod?: "cosine" | "structural";
+    } = {},
   ): Promise<unknown> {
     const body: Record<string, unknown> = {
       entity_labels: null,
@@ -185,13 +277,23 @@ export class BonfiresClient {
     };
     if (opts.threshold !== undefined) body.threshold = opts.threshold;
     if (opts.topNCap !== undefined) body.top_n_cap = opts.topNCap;
+    if (opts.linkMethod !== undefined) body.link_method = opts.linkMethod;
+    // Populate the `origin → taxonomy → ontology → community → entity` cascade
+    // into a named grammar. Without this, the smart arm has no expansion set
+    // and degrades to vector-only.
+    if (opts.extendGrammar !== undefined) body.extend_grammar = opts.extendGrammar;
+    if (opts.grammarMinMentions !== undefined) body.grammar_min_mentions = opts.grammarMinMentions;
+    if (opts.grammarMinRelations !== undefined) body.grammar_min_relations = opts.grammarMinRelations;
     return this.req("POST", `/ontology/${bonfireId}/build`, body);
   }
 
   async buildCommunities(bonfireId: string, sampleSize = 10): Promise<unknown> {
+    // `sync=true` runs Leiden + community summaries inline. Required so the
+    // subsequent ontology build sees real :Community nodes. Default-async is
+    // fire-and-forget and produces an empty cascade for small local bonfires.
     const url = `${this.apiUrl}/knowledge_graph/communities/build?bonfire_id=${encodeURIComponent(
       bonfireId,
-    )}&sample_size=${sampleSize}`;
+    )}&sample_size=${sampleSize}&sync=true`;
     const r = await this.fetchImpl(url, { method: "POST", headers: this.headers() });
     if (!r.ok) throw new Error(`buildCommunities failed ${r.status}`);
     return r.json();
@@ -222,18 +324,26 @@ export class BonfiresClient {
     numResults: number;
     centerNodeUuid?: string;
     smart?: boolean;
-    autoResolveCenter?: boolean;
     searchRecipe?: string;
+    /** Per-scope BFS toggle (v0.6.1+): e.g. ['edges'] restricts multi-hop
+     *  to the edge pool only, keeping node pool at bm25+cosine. Omit for
+     *  default (BFS on both scopes when center is present). */
+    bfsScopes?: Array<"nodes" | "edges">;
+    /** Per-scope cross-encoder rerank toggle (v0.6.1+): e.g. ['nodes','edges']
+     *  keeps the recipe's reranker on those scopes, swaps others to RRF
+     *  (cheap, no API call). Omit for default (recipe's own rerankers). */
+    rerankScopes?: Array<"nodes" | "edges" | "episodes" | "communities">;
   }): Promise<KgDelveResult> {
     const body: Record<string, unknown> = {
       bonfire_id: args.bonfireId,
       query: args.query,
       num_results: args.numResults,
-      auto_resolve_center: args.autoResolveCenter ?? true,
     };
     if (args.centerNodeUuid) body.center_node_uuid = args.centerNodeUuid;
     if (args.smart) body.smart = true;
     if (args.searchRecipe) body.search_recipe = args.searchRecipe;
+    if (args.bfsScopes) body.bfs_scopes = args.bfsScopes;
+    if (args.rerankScopes) body.rerank_scopes = args.rerankScopes;
     return this.req("POST", "/delve", body);
   }
 
