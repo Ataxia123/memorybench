@@ -17,13 +17,30 @@ export function flattenFacts(result: KgDelveResult): SearchHit[] {
 }
 
 export async function armSearch(args: {
-  client: Pick<BonfiresClient, "vectorSearch" | "kgDelve">;
+  client: Pick<BonfiresClient, "vectorSearch" | "kgDelve" | "chunksSearch">;
   query: string;
   config: BonfiresConfig;
 }): Promise<SearchHit[]> {
   const { client, query, config } = args;
   try {
     switch (config.arm) {
+      case "smart_chunks_only": {
+        // Engram replication — pure hybrid retrieval over the trimtab chunks
+        // grammar. No KG calls, no cascade, no vector_store. Tests the
+        // retrieval ceiling on a single-store setup and exercises the
+        // zero-extraction cold-start path (works before any chunk has been
+        // promoted to graphiti).
+        const hits = await client.chunksSearch({
+          bonfireId: config.bonfireId,
+          query,
+          limit: 20,
+        });
+        return hits.map((h) => ({
+          text: h.text,
+          score: h.score,
+          kind: "chunk" as const,
+        }));
+      }
       case "smart_full": {
         // All four scopes from COMBINED_HYBRID_SEARCH_CROSS_ENCODER
         // (graphiti's default 4-scope recipe). Single smart=true call
@@ -67,21 +84,49 @@ export async function armSearch(args: {
           score: e.score ?? null,
           kind: "fact" as const,
         }));
+        // v25+ bonfires: stack_service stores episodes as a JSON object
+        // with shape { name, content, updates, messages }. The `content`
+        // field is a ~300-char LLM summary — the lean text we want in the
+        // answer context. Without this helper we were JSON-stringifying
+        // the full object (name + content + 5 updates + 18 messages) and
+        // shipping 8.5 KB per episode × ~27 episodes/query ≈ 60 k tokens.
+        //
+        // Fallback chain:
+        //   1. `ep.summary` string (older bonfire shape)
+        //   2. `content.content` string (v25+ summary prose) ← target
+        //   3. `content.summary` string (hypothetical future shape)
+        //   4. `ep.content` string (pre-v25 raw message dump)
+        //   5. `content.name` string (headline; last resort short form)
+        //   6. "" (skip)
+        const toText = (ep: { content?: unknown; summary?: string }): string => {
+          if (typeof ep.summary === "string" && ep.summary.length > 0) return ep.summary;
+          const raw = ep.content;
+          if (raw && typeof raw === "object") {
+            const r = raw as Record<string, unknown>;
+            if (typeof r.content === "string" && r.content.length > 0) return r.content;
+            if (typeof r.summary === "string" && r.summary.length > 0) return r.summary;
+            if (typeof r.name === "string" && r.name.length > 0) return r.name;
+            return "";
+          }
+          if (typeof raw === "string" && raw.length > 0) return raw;
+          return "";
+        };
         const episodeSeen = new Set<string>();
         const episodes = (r.episodes ?? [])
           .filter((ep) => {
-            const key = (ep.content ?? ep.summary ?? "").trim();
+            const key = toText(ep).trim();
             if (!key || episodeSeen.has(key)) return false;
             episodeSeen.add(key);
             return true;
           })
-          .map((ep) => ({
-            text: ep.valid_at
-              ? `${ep.content ?? ep.summary ?? ""} (event_time: ${ep.valid_at})`
-              : (ep.content ?? ep.summary ?? ""),
-            score: null as number | null,
-            kind: "episode" as const,
-          }));
+          .map((ep) => {
+            const body = toText(ep);
+            return {
+              text: ep.valid_at ? `${body} (event_time: ${ep.valid_at})` : body,
+              score: null as number | null,
+              kind: "episode" as const,
+            };
+          });
         const communities = (r.communities ?? [])
           .filter((c) => c.name && c.summary)
           .map((c) => ({
@@ -183,6 +228,57 @@ export async function armSearch(args: {
           }));
         return [...flattenFacts(r).slice(0, 15), ...entities];
       }
+      case "smart_naked": {
+        // Zep published pattern without vectors: nodes RRF + edges
+        // cross_encoder, 20 each = 40 items. Matches zep's LoCoMo eval
+        // script verbatim (asyncio.gather of scope=nodes/rrf and
+        // scope=edges/cross_encoder). Isolates whether the 5 vector chunks
+        // in "smart" add signal on top of the paper-faithful zep baseline.
+        const bfsScopesEnv = process.env.BONFIRES_BFS_SCOPES;
+        const rerankScopesEnv = process.env.BONFIRES_RERANK_SCOPES;
+        const bfsScopes = bfsScopesEnv
+          ? (bfsScopesEnv.split(",").map((s) => s.trim()).filter(Boolean) as Array<"nodes" | "edges">)
+          : undefined;
+        const rerankScopes = rerankScopesEnv
+          ? (rerankScopesEnv
+              .split(",")
+              .map((s) => s.trim())
+              .filter(Boolean) as Array<"nodes" | "edges" | "episodes" | "communities">)
+          : undefined;
+        const [nodeRes, edgeRes] = await Promise.all([
+          client.kgDelve({
+            bonfireId: config.bonfireId,
+            query,
+            numResults: 20,
+            smart: true,
+            searchRecipe: "NODE_HYBRID_SEARCH_RRF",
+            bfsScopes,
+            rerankScopes,
+          }),
+          client.kgDelve({
+            bonfireId: config.bonfireId,
+            query,
+            numResults: 20,
+            smart: true,
+            searchRecipe: "EDGE_HYBRID_SEARCH_CROSS_ENCODER",
+            bfsScopes,
+            rerankScopes,
+          }),
+        ]);
+        const entities = (nodeRes.entities ?? [])
+          .filter((e) => e.name && e.summary)
+          .map((e) => ({
+            text: `${e.name}: ${e.summary}`,
+            score: null as number | null,
+            kind: "entity" as const,
+          }));
+        const facts = (edgeRes.edges ?? []).map((e) => ({
+          text: e.valid_at ? `${e.fact} (event_time: ${e.valid_at})` : e.fact,
+          score: e.score ?? null,
+          kind: "fact" as const,
+        }));
+        return [...facts, ...entities];
+      }
       case "smart": {
         // Zep-pattern dual scope (nodes + edges in parallel) layered over
         // trimtab cascade enhancement. Each call goes through smart=true
@@ -217,7 +313,14 @@ export async function armSearch(args: {
               .filter(Boolean) as Array<"nodes" | "edges" | "episodes" | "communities">)
           : undefined;
 
-        const [nodeRes, edgeRes] = await Promise.all([
+        // Fire node+edge+vector concurrently. Vector adds per-message
+        // recall that graphiti's entity/edge extraction may have missed
+        // (property-style facts like "Caroline is single"). 5 chunks
+        // is the empirical sweet spot on LoCoMo conv-26: v21 hit 60.3%
+        // (v12 baseline = 58.29%) with 20 facts + 20 entities + 5 vec.
+        // Mixing in episodes (v23) added noise on multi-hop and
+        // hallucinations on adversarial — reverted.
+        const [nodeRes, edgeRes, vectorRes] = await Promise.all([
           client.kgDelve({
             bonfireId: config.bonfireId,
             query,
@@ -236,6 +339,11 @@ export async function armSearch(args: {
             bfsScopes,
             rerankScopes,
           }),
+          client.vectorSearch({
+            bonfireId: config.bonfireId,
+            query,
+            limit: 5,
+          }),
         ]);
         const entities = (nodeRes.entities ?? [])
           .filter((e) => e.name && e.summary)
@@ -249,7 +357,12 @@ export async function armSearch(args: {
           score: e.score ?? null,
           kind: "fact" as const,
         }));
-        return [...facts, ...entities];
+        const chunks = (vectorRes ?? []).map((h) => ({
+          text: h.text,
+          score: h.score,
+          kind: "chunk" as const,
+        }));
+        return [...facts, ...entities, ...chunks];
       }
     }
   } catch (err) {

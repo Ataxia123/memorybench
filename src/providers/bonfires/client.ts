@@ -1,7 +1,7 @@
 import { execSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import type { StackMessage, JobStatus, VectorSearchResult, KgDelveResult } from "./types.js";
+import type { StackMessage, JobStatus, VectorSearchResult, KgDelveResult, ChunksSearchHit } from "./types.js";
 
 type FetchLike = typeof fetch;
 
@@ -87,8 +87,17 @@ export class BonfiresClient {
     }
   }
 
-  stackAdd(agentId: string, messages: StackMessage[]): Promise<unknown> {
-    return this.req("POST", `/agents/${agentId}/stack/add`, { messages });
+  /** Append messages to an agent's stack. Backend validates 1-2 messages
+   *  per request (paired user+assistant pattern), so for bulk we loop and
+   *  send 2-at-a-time. All metadata on each StackMessage (including
+   *  ``preserve_messages: true`` for LoCoMo-style JSON-structured episodes)
+   *  flows through to the Mongo Message.metadata dict that stack_service
+   *  reads at process time. */
+  async stackAdd(agentId: string, messages: StackMessage[]): Promise<void> {
+    for (let i = 0; i < messages.length; i += 2) {
+      const batch = messages.slice(i, i + 2);
+      await this.req("POST", `/agents/${agentId}/stack/add`, { messages: batch });
+    }
   }
 
   stackProcess(agentId: string): Promise<{ task_id: string }> {
@@ -297,6 +306,34 @@ export class BonfiresClient {
     const r = await this.fetchImpl(url, { method: "POST", headers: this.headers() });
     if (!r.ok) throw new Error(`buildCommunities failed ${r.status}`);
     return r.json();
+  }
+
+  /**
+   * POST /trimtabs/grammars/{bonfireId}/chunks/search — hybrid retrieval over
+   * the unified per-bonfire `chunks` grammar (trimtab HybridRetriever).
+   * Returns verbatim chunk prose (`text`) plus the 1:1 LLM summary and
+   * metadata. No KG calls; no cascade. Powers the `smart_chunks_only`
+   * Engram-replication arm.
+   *
+   * `limit` maps to the route's `top_k`; `filterLabels` narrows the retrieval
+   * pool to chunks tagged with any of the given taxonomy categories. Both
+   * optional — the route accepts the omitted form (filter_labels=null).
+   */
+  async chunksSearch(args: {
+    bonfireId: string;
+    query: string;
+    limit?: number;
+    filterLabels?: string[];
+  }): Promise<ChunksSearchHit[]> {
+    return this.req<ChunksSearchHit[]>(
+      "POST",
+      `/trimtabs/grammars/${args.bonfireId}/chunks/search`,
+      {
+        query: args.query,
+        top_k: args.limit ?? 10,
+        filter_labels: args.filterLabels ?? null,
+      },
+    );
   }
 
   async vectorSearch(args: { bonfireId: string; query: string; limit: number }): Promise<VectorSearchResult[]> {

@@ -8,7 +8,15 @@ export interface Config {
   googleApiKey: string
   bonfiresApiUrl: string
   bonfiresApiKey: string
-  bonfiresArm: "vector" | "graph" | "smart"
+  bonfiresArm:
+    | "vector"
+    | "graph"
+    | "smart_graph"
+    | "smart"
+    | "smart_full"
+    | "smart_naked"
+    | "smart_chunks_only"
+    | "zep"
   bonfiresBonfireId: string
 }
 
@@ -22,7 +30,15 @@ export const config: Config = {
   googleApiKey: process.env.GOOGLE_API_KEY || "",
   bonfiresApiUrl: process.env.BONFIRES_API_URL || "http://localhost:8000",
   bonfiresApiKey: process.env.BONFIRES_API_KEY || "",
-  bonfiresArm: (process.env.BONFIRES_ARM ?? "smart") as "vector" | "graph" | "smart",
+  bonfiresArm: (process.env.BONFIRES_ARM ?? "smart") as
+    | "vector"
+    | "graph"
+    | "smart_graph"
+    | "smart"
+    | "smart_full"
+    | "smart_naked"
+    | "smart_chunks_only"
+    | "zep",
   bonfiresBonfireId: process.env.BONFIRES_BONFIRE_ID || "locomo-eval",
 }
 
