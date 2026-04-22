@@ -364,6 +364,67 @@ export async function armSearch(args: {
         }));
         return [...facts, ...entities, ...chunks];
       }
+      case "smart_unified": {
+        // Same shape as `smart` (zep dual-scope graph + N chunks in parallel)
+        // but chunks come from the trimtab `chunks` grammar via hybrid +
+        // cross-encoder rerank (Engram-style) instead of Weaviate cosine.
+        // Tests whether chunks retrieval + KG multi-hop recovers the
+        // single-hop gap while preserving multi-hop accuracy.
+        const bfsScopesEnvU = process.env.BONFIRES_BFS_SCOPES;
+        const rerankScopesEnvU = process.env.BONFIRES_RERANK_SCOPES;
+        const bfsScopesU = bfsScopesEnvU
+          ? (bfsScopesEnvU.split(",").map((s) => s.trim()).filter(Boolean) as Array<"nodes" | "edges">)
+          : undefined;
+        const rerankScopesU = rerankScopesEnvU
+          ? (rerankScopesEnvU
+              .split(",")
+              .map((s) => s.trim())
+              .filter(Boolean) as Array<"nodes" | "edges" | "episodes" | "communities">)
+          : undefined;
+        const [nodeResU, edgeResU, chunkHits] = await Promise.all([
+          client.kgDelve({
+            bonfireId: config.bonfireId,
+            query,
+            numResults: 20,
+            smart: true,
+            searchRecipe: "NODE_HYBRID_SEARCH_RRF",
+            bfsScopes: bfsScopesU,
+            rerankScopes: rerankScopesU,
+          }),
+          client.kgDelve({
+            bonfireId: config.bonfireId,
+            query,
+            numResults: 20,
+            smart: true,
+            searchRecipe: "EDGE_HYBRID_SEARCH_CROSS_ENCODER",
+            bfsScopes: bfsScopesU,
+            rerankScopes: rerankScopesU,
+          }),
+          client.chunksSearch({
+            bonfireId: config.bonfireId,
+            query,
+            limit: 5,
+          }),
+        ]);
+        const entitiesU = (nodeResU.entities ?? [])
+          .filter((e) => e.name && e.summary)
+          .map((e) => ({
+            text: `${e.name}: ${e.summary}`,
+            score: null as number | null,
+            kind: "entity" as const,
+          }));
+        const factsU = (edgeResU.edges ?? []).map((e) => ({
+          text: e.valid_at ? `${e.fact} (event_time: ${e.valid_at})` : e.fact,
+          score: e.score ?? null,
+          kind: "fact" as const,
+        }));
+        const chunksU = chunkHits.map((h) => ({
+          text: h.text,
+          score: h.score,
+          kind: "chunk" as const,
+        }));
+        return [...factsU, ...entitiesU, ...chunksU];
+      }
     }
   } catch (err) {
     console.error(`bonfires search (${config.arm}) failed:`, err);

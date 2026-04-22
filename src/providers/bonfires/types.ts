@@ -108,6 +108,7 @@ export type BonfiresArm =
   | "smart_full"
   | "smart_naked"
   | "smart_chunks_only"
+  | "smart_unified"
   | "zep"
 
 export interface BonfiresConfig {

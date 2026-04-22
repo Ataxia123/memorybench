@@ -16,6 +16,7 @@ export interface Config {
     | "smart_full"
     | "smart_naked"
     | "smart_chunks_only"
+    | "smart_unified"
     | "zep"
   bonfiresBonfireId: string
 }
@@ -38,6 +39,7 @@ export const config: Config = {
     | "smart_full"
     | "smart_naked"
     | "smart_chunks_only"
+    | "smart_unified"
     | "zep",
   bonfiresBonfireId: process.env.BONFIRES_BONFIRE_ID || "locomo-eval",
 }
