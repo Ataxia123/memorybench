@@ -613,6 +613,15 @@ export class BonfiresClient {
     bfsScopes?: Array<"nodes" | "edges">
     rerankScopes?: Array<"nodes" | "edges" | "episodes" | "communities">
     nowDate?: string
+    // Two-pass retrieval: when true the server runs chunks_search(top_k=1)
+    // FIRST, builds an enriched query from the top-1 chunk's metadata
+    // (text/spacy_triples/taxonomy_labels/l2_label/timestamp), and threads
+    // both the enriched query AND the top-1's kg_entity_uuid (as an
+    // additional graphiti BFS center) into the second-pass entities +
+    // facts + chunks_search calls. Adds ~1-3s for the extra round-trip
+    // but improves aggregate / multi-hop questions where the top chunk
+    // surfaces a known entity that the raw query embedding misses.
+    enrichFromTopChunk?: boolean
   }): Promise<HybridSearchResult> {
     const body: Record<string, unknown> = {
       bonfire_id: args.bonfireId,
@@ -636,6 +645,7 @@ export class BonfiresClient {
     if (args.bfsScopes !== undefined) body.bfs_scopes = args.bfsScopes
     if (args.rerankScopes !== undefined) body.rerank_scopes = args.rerankScopes
     if (args.nowDate !== undefined) body.now_date = args.nowDate
+    if (args.enrichFromTopChunk !== undefined) body.enrich_from_top_chunk = args.enrichFromTopChunk
     return this.req<HybridSearchResult>("POST", "/search/hybrid", body)
   }
 

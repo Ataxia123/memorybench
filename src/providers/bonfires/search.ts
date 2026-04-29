@@ -426,6 +426,13 @@ export async function armSearch(args: {
         // defaults to BONFIRES_FINAL_RERANK_TOP_N (matches the old gate).
         const useFinalRerank = process.env.BONFIRES_FINAL_RERANK === "1"
         const finalRerankTopN = parseInt(process.env.BONFIRES_FINAL_RERANK_TOP_N ?? "15", 10)
+        // Two-pass enrichment knob (server-side flag). When BONFIRES_ENRICH_FROM_TOP_CHUNK=1
+        // the delve server runs chunks_search(top_k=1) first, distills the top-1's
+        // metadata (text/spacy_triples/taxonomy_labels/l2_label/timestamp) into an
+        // enriched query, and uses that for the second-pass chunks + KG calls. The
+        // top-1's kg_entity_uuid is also threaded into graphiti as an additional BFS
+        // center seed. Costs +1 chunks_search round-trip; off by default for back-compat.
+        const enrichFromTopChunk = process.env.BONFIRES_ENRICH_FROM_TOP_CHUNK === "1"
 
         const res = await client.hybridSearch({
           bonfireId: config.bonfireId,
@@ -441,6 +448,7 @@ export async function armSearch(args: {
           ),
           unifiedRerank: useFinalRerank,
           unifiedRerankTopN: finalRerankTopN,
+          enrichFromTopChunk,
           nowDate,
         })
 
