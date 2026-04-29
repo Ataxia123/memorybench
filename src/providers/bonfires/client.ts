@@ -598,6 +598,15 @@ export class BonfiresClient {
     // Optional in-server CE rerank (Phase 3 point reranker)
     rerank?: boolean
     rerankTopN?: number
+    // Optional unified CE rerank over the merged pool of all four kinds
+    // (chunks + entities + facts + hub_facts). When true, server populates
+    // `unified_results` with a CE-ranked flat top-N; per-kind arrays in
+    // the response stay populated unchanged for back-compat. Strictly
+    // additive to `rerank` (KG-only) — when both are on the unified pass
+    // runs LAST over the already-KG-reranked pool. Replaces the bench's
+    // old post-hoc ceRerank round-trip.
+    unifiedRerank?: boolean
+    unifiedRerankTopN?: number
     // Standard delve knobs forwarded to kgDelve (server defaults wired)
     smart?: boolean
     searchRecipe?: string
@@ -620,6 +629,8 @@ export class BonfiresClient {
     if (args.includeHubFacts !== undefined) body.include_hub_facts = args.includeHubFacts
     if (args.rerank !== undefined) body.rerank = args.rerank
     if (args.rerankTopN !== undefined) body.rerank_top_n = args.rerankTopN
+    if (args.unifiedRerank !== undefined) body.unified_rerank = args.unifiedRerank
+    if (args.unifiedRerankTopN !== undefined) body.unified_rerank_top_n = args.unifiedRerankTopN
     if (args.smart !== undefined) body.smart = args.smart
     if (args.searchRecipe !== undefined) body.search_recipe = args.searchRecipe
     if (args.bfsScopes !== undefined) body.bfs_scopes = args.bfsScopes

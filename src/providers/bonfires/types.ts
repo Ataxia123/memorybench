@@ -105,14 +105,30 @@ export interface ChunksSearchHit {
   }
 }
 
+/** One ranked item from /search/hybrid when unified_rerank=True.
+ * Mirrors UnifiedRerankItem on the delve side. The bench renders these
+ * directly as SearchHit when present, replacing per-kind merge + the
+ * legacy bench-side ceRerank round-trip. */
+export interface UnifiedRerankItem {
+  text: string
+  score: number
+  kind: "chunk" | "entity" | "fact" | "hub_fact"
+  id: string
+  metadata: Record<string, unknown>
+}
+
 /** Response shape from `POST /search/hybrid` (v32 unified endpoint).
  * Composes chunks + entities + edges + hub_facts in one payload.
- * Mirrors HybridSearchResponse on the delve side. */
+ * Mirrors HybridSearchResponse on the delve side. When the request sets
+ * unified_rerank=True the server additionally populates `unified_results`
+ * with a CE-ranked flat top-N across all kinds; per-kind arrays remain
+ * populated unchanged for back-compat. */
 export interface HybridSearchResult {
   chunks: ChunksSearchHit[]
   entities: KgDelveEntity[]
   edges: KgDelveEdge[]
   hub_facts: Array<{ text: string; kind: string; score: number | null }>
+  unified_results: UnifiedRerankItem[] | null
   debug: {
     mode: "raw" | "enriched" | "enriched_gated" | "fanout"
     kg_query_used: string | null

@@ -1,6 +1,5 @@
 import type { BonfiresClient } from "./client.js"
 import type { BonfiresConfig, KgDelveResult } from "./types.js"
-import { ceRerank } from "./rerank.js"
 
 /** Set of entity labels dropped from the rerank pool by smart_hybrid.
  * PreferenceHub is the per-speaker aggregate that unions ALL preferences
@@ -418,6 +417,15 @@ export async function armSearch(args: {
         // server default stand (include_hub_facts=true) and don't wire
         // BONFIRES_HUB_TRAVERSAL through — the legacy v30-era knob only
         // gated the bench-side hub call that smart_hybrid no longer makes.
+        //
+        // Server-side unified rerank (task #56): when BONFIRES_FINAL_RERANK=1
+        // we ask delve to rerun a single CE pass over the merged pool of
+        // chunks+entities+facts+hub_facts and surface the ranked top-N as
+        // `unified_results`. Replaces the legacy bench-side ceRerank
+        // round-trip — one fewer HTTP hop, identical CE model. Top-N
+        // defaults to BONFIRES_FINAL_RERANK_TOP_N (matches the old gate).
+        const useFinalRerank = process.env.BONFIRES_FINAL_RERANK === "1"
+        const finalRerankTopN = parseInt(process.env.BONFIRES_FINAL_RERANK_TOP_N ?? "15", 10)
 
         const res = await client.hybridSearch({
           bonfireId: config.bonfireId,
@@ -431,8 +439,24 @@ export async function armSearch(args: {
             process.env.BONFIRES_HYBRID_RERANK_TOP_N ?? String(Math.max(entitiesLimit, factsLimit)),
             10
           ),
+          unifiedRerank: useFinalRerank,
+          unifiedRerankTopN: finalRerankTopN,
           nowDate,
         })
+
+        // When the server returned unified_results, prefer them — they
+        // already encode the merged + CE-reranked top-N across all four
+        // kinds. Skip the per-kind merge below entirely.
+        if (res.unified_results && res.unified_results.length > 0) {
+          return res.unified_results.map((item) => ({
+            text: item.text,
+            score: item.score,
+            kind:
+              item.kind === "hub_fact"
+                ? ("fact" as const)
+                : (item.kind as "fact" | "entity" | "chunk"),
+          }))
+        }
 
         // Drop PreferenceHub aggregates the same way smart_unified does.
         const dropHubEntities = process.env.BONFIRES_KEEP_HUB_ENTITIES !== "1"
@@ -510,7 +534,13 @@ export async function armSearch(args: {
           kind: "fact" as const,
         }))
 
-        return [...factsU, ...entitiesU, ...chunksU, ...hubFactsU]
+        // Fall-through path: server didn't return unified_results (either
+        // BONFIRES_FINAL_RERANK=0, or the server build predates task #56).
+        // Use the per-kind arrays as before. The legacy bench-side ceRerank
+        // round-trip is gone — when the user wants final-stage rerank they
+        // get it server-side via unified_rerank (no extra HTTP hop).
+        const merged = [...factsU, ...entitiesU, ...chunksU, ...hubFactsU]
+        return merged
       }
       case "smart_unified":
       case "smart_cascade": {
@@ -924,19 +954,14 @@ export async function armSearch(args: {
         )
         const merged = [...factsU, ...entitiesU, ...chunksU, ...hubFactsU]
 
-        // Final-stage cross-encoder rerank over the union of
-        // facts+entities+chunks via delve's /rerank route (BGE-reranker-v2-m3).
-        // Rationale: per-lane CE rerank inside delve scores fact-vs-fact and
-        // chunk-vs-chunk independently; topic-aggregate chunks and tangentially-
-        // related facts can both win their lanes and end up in top-K together,
-        // burying the actual answer-bearing chunk. A single CE pass over the
-        // merged pool — same model as chunks_search uses internally — demotes
-        // "topical but answer-wrong" hits across lane boundaries.
-        // Gated by BONFIRES_FINAL_RERANK=1 (default off for clean A/B).
-        if (process.env.BONFIRES_FINAL_RERANK === "1") {
-          const topN = parseInt(process.env.BONFIRES_FINAL_RERANK_TOP_N ?? "15", 10)
-          return await ceRerank(query, merged, { topN, baseUrl: config.apiUrl })
-        }
+        // Note: the legacy BONFIRES_FINAL_RERANK=1 ceRerank round-trip
+        // has been removed (task #56). For server-side unified rerank
+        // across all kinds use the smart_hybrid arm — it now requests
+        // `unified_rerank` from delve directly and avoids the extra
+        // HTTP hop. The smart_unified/smart_cascade arms compose their
+        // pool client-side (parallel kgDelve + chunksSearch + hubTraversal)
+        // so a unified-pool CE rerank doesn't have a server-side hook
+        // here; the merged order stands.
         return merged
       }
     }
