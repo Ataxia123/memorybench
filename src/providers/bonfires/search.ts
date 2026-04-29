@@ -448,6 +448,85 @@ export async function armSearch(args: {
         // rich top-1) and skips on vague single-hop pleasantries that dilute
         // the enriched query. 0 (default) = legacy always-enrich behavior.
         const enrichMinCenters = parseInt(process.env.BONFIRES_ENRICH_MIN_CENTERS ?? "0", 10)
+        // Entity-lane positive gate: when set, only enrich if pass-0 top-1
+        // chunk's aux_lane_breakdown contains the 'entity' lane (entity-name
+        // token match fired). Empirically the cleanest discriminator on LoCoMo.
+        const enrichRequireEntityLane = process.env.BONFIRES_ENRICH_REQUIRE_ENTITY_LANE === "1"
+        // Community-cos inverted gate: when >0, skip enrichment if
+        // aux_lane_breakdown['community_cos'] exceeds the threshold (vague
+        // topical match → enrichment dilutes). Recommended: 0.008.
+        const enrichMaxCommunityCos = parseFloat(
+          process.env.BONFIRES_ENRICH_MAX_COMMUNITY_COS ?? "0"
+        )
+        // NLP-based question-shape gate. When set, the server classifies
+        // the query and OVERRIDES the chunk-metadata gates above with a
+        // "skip" / "enrich" / "neutral" verdict (mirrors hub_traversal's
+        // detect_list_question philosophy).
+        const enrichQuestionShapeGate = process.env.BONFIRES_ENRICH_QUESTION_SHAPE_GATE === "1"
+        // Top-1 presearch (BONFIRES_ENRICH_CHUNKS_SEARCH=1): when the
+        // enrichment gate passes, the server re-runs chunks_search with
+        // the enriched query and uses the result as the final chunks
+        // pool. Restores v40-enrich's chunks-side enrichment without the
+        // fanout architecture. Adds ~3.5s when gate passes, 0s when blocked.
+        const enrichChunksSearch = process.env.BONFIRES_ENRICH_CHUNKS_SEARCH === "1"
+        // MMR diversification (BONFIRES_MMR_DIVERSIFY=1): re-orders the
+        // unified rerank pool to balance relevance with diversity. Useful
+        // for multi-aspect / list questions where CE rerank clusters
+        // near-duplicate chunks at the top. lambda=1.0 → pure relevance
+        // (no-op); 0.0 → pure diversity. Default 0.7.
+        const mmrDiversify = process.env.BONFIRES_MMR_DIVERSIFY === "1"
+        const mmrLambda = parseFloat(process.env.BONFIRES_MMR_LAMBDA ?? "0.7")
+        // Per-lane MMR on the fact/edge list (BONFIRES_MMR_EDGES=1): runs
+        // BEFORE the merged rerank pool is built, compressing 5+ near-
+        // duplicate facts (e.g., "X pursues counseling" variants) into 1-2
+        // representatives so diverse facts get top-N slots. Independent of
+        // BONFIRES_MMR_DIVERSIFY; both can run together. Default lambda
+        // 0.6 (slightly diversity-leaning) since fact near-duplication is
+        // the worst across kinds.
+        const mmrEdges = process.env.BONFIRES_MMR_EDGES === "1"
+        const mmrEdgesLambda = parseFloat(process.env.BONFIRES_MMR_EDGES_LAMBDA ?? "0.6")
+        // Disambiguated KG scopes (BONFIRES_DISAMBIGUATED_KG_SCOPES=1):
+        // splits delve into entity-only + fact-only calls with scope-tuned
+        // query formulations (nouns/categories for entities, verbs/temporal
+        // for facts). Costs +1 delve call (~1-2s parallel) per arm; default
+        // off for back-compat.
+        const disambiguatedKgScopes = process.env.BONFIRES_DISAMBIGUATED_KG_SCOPES === "1"
+        // Gate-time presearch target (BONFIRES_PRESEARCH_TARGET): which
+        // trimtab symbol the top-1 enrichment lookup hits.
+        //   "messages"   (default) — single conversation turns; matches
+        //                 prior behavior.
+        //   "aggregates" — cross-session preference/topic summaries
+        //                 (PreferenceHub/TopicHub UUIDs); produces richer
+        //                 enrichment seeds for broad/multi-aspect
+        //                 questions.
+        // No effect when enrichFromTopChunk is off.
+        const presearchTarget = (process.env.BONFIRES_PRESEARCH_TARGET ?? "messages") as
+          | "messages"
+          | "aggregates"
+        // Gate-time presearch source (BONFIRES_PRESEARCH_SOURCE): which
+        // hydration source feeds the enrichment gate's top-1 metadata.
+        //   "chunks"          (default) — chunks_search top-1 chunk drives
+        //                     _build_top_chunk_enrichment (~3.5s, full
+        //                     metadata blob).
+        //   "trimtab_cascade" — chunks-grammar cascade walk emits a
+        //                     resolved-refs string; wrapped as a single
+        //                     synthetic top-1 (sub-second, token-light,
+        //                     deterministic on grammar structure). The
+        //                     chunks pool is then [synthetic_top1].
+        // Orthogonal to BONFIRES_PRESEARCH_TARGET (which selects the
+        // chunks-search SYMBOL — only used by the "chunks" source).
+        const presearchSource = (process.env.BONFIRES_PRESEARCH_SOURCE ?? "chunks") as
+          | "chunks"
+          | "trimtab_cascade"
+        // Cascade-first parallel pipeline (BONFIRES_CASCADE_FIRST_PIPELINE=1):
+        // delve runs the trimtab cascade walk on the raw query first,
+        // builds an enriched query from the walked text, and runs
+        // chunks_search + kg_entity + kg_fact + hub in PARALLEL with the
+        // enriched query (bypasses the pre-gate chunks_search + shape
+        // gate logic). Requires the bonfire's primary_grammar to point
+        // at a multi-symbol cascade grammar; falls back to legacy when
+        // cascade returns empty. Independent of all other flags above.
+        const cascadeFirstPipeline = process.env.BONFIRES_CASCADE_FIRST_PIPELINE === "1"
 
         const res = await client.hybridSearch({
           bonfireId: config.bonfireId,
@@ -466,6 +545,18 @@ export async function armSearch(args: {
           enrichFromTopChunk,
           enrichedFanout,
           enrichMinCenters,
+          enrichRequireEntityLane,
+          enrichMaxCommunityCos,
+          enrichQuestionShapeGate,
+          enrichChunksSearch,
+          mmrDiversify,
+          mmrLambda,
+          mmrEdges,
+          mmrEdgesLambda,
+          disambiguatedKgScopes,
+          presearchTarget,
+          presearchSource,
+          cascadeFirstPipeline,
           nowDate,
         })
 

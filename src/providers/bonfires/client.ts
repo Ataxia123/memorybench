@@ -639,6 +639,67 @@ export class BonfiresClient {
     // and skips on vague single-hop pleasantries that dilute the enriched
     // query. Ignored when both enrichFromTopChunk and enrichedFanout are off.
     enrichMinCenters?: number
+    // Entity-lane positive gate: only enrich when pass-0 top-1's
+    // aux_lane_breakdown contains the 'entity' lane.
+    enrichRequireEntityLane?: boolean
+    // Community-cos inverted gate (>0): skip enrichment when pass-0
+    // top-1's aux_lane_breakdown['community_cos'] exceeds threshold.
+    enrichMaxCommunityCos?: number
+    // NLP-based question-shape gate. When true, the server classifies
+    // the query as "skip" (narrow factoid / modal / interpretive) or
+    // "enrich" (open-ended) and overrides the chunk-metadata gates.
+    // Default false = legacy chunk-metadata-only gating.
+    enrichQuestionShapeGate?: boolean
+    // Top-1 presearch: when the enrichment gate passes, re-run
+    // chunks_search with the enriched query and use the result as the
+    // final chunks pool. Restores v40-enrich's chunks-side enrichment
+    // mechanism while keeping single-call behavior on gate-blocked
+    // questions. Adds ~3.5s when gate passes, 0s when blocked.
+    enrichChunksSearch?: boolean
+    // MMR (Maximal Marginal Relevance) diversification: re-orders the
+    // unified rerank pool to balance relevance with diversity. Useful
+    // for multi-aspect / list questions where pure CE rerank clusters
+    // near-duplicate chunks at the top. Requires unifiedRerank=true to
+    // have any effect. lambda=1.0 → pure relevance (no-op); 0.0 → pure
+    // diversity. Default 0.7.
+    mmrDiversify?: boolean
+    mmrLambda?: number
+    // Per-lane MMR on facts/edges only — runs BEFORE the merged rerank
+    // pool is built. Compresses near-duplicate facts (5+ variants of
+    // "X pursues counseling" → 1-2 representatives) so diverse facts
+    // get top-N slots. Independent of mmrDiversify; both can run.
+    // Default lambda 0.6 (slightly diversity-leaning) since fact near-
+    // duplication is the worst across kinds.
+    mmrEdges?: boolean
+    mmrEdgesLambda?: number
+    // Disambiguated KG scopes: split delve into entity-only + fact-only
+    // calls with scope-tuned query formulations (entities get
+    // noun/category-rich query, facts get verb/temporal-rich query).
+    // Costs +1 delve call per arm (~1-2s in parallel). Default false.
+    disambiguatedKgScopes?: boolean
+    // Gate-time presearch target: which trimtab symbol the top-1
+    // enrichment lookup hits. "messages" (default) = single
+    // conversation turns; "aggregates" = cross-session
+    // preference/topic summaries (PreferenceHub/TopicHub UUIDs). For
+    // broad/multi-aspect questions, aggregates produce richer
+    // enrichment seeds. No effect when enrichFromTopChunk=false.
+    presearchTarget?: "messages" | "aggregates"
+    // Gate-time presearch source: which hydration mechanism produces
+    // the enrichment gate's top-1 metadata. "chunks" (default) = full
+    // chunks_search top-1 (~3.5s, full chunk + metadata blob).
+    // "trimtab_cascade" = chunks-grammar cascade walk wrapped as a
+    // single synthetic top-1 (sub-second, token-light, deterministic
+    // on grammar). Orthogonal to presearchTarget — that field selects
+    // the symbol within the "chunks" path only.
+    presearchSource?: "chunks" | "trimtab_cascade"
+    // Cascade-first parallel pipeline. When true the server runs the
+    // trimtab cascade walk on the raw query first, builds an enriched
+    // query from the walked text, and runs chunks_search + kg_entity +
+    // kg_fact + hub in PARALLEL with the enriched query (bypasses the
+    // pre-gate chunks_search + shape gate logic). Requires the bonfire's
+    // primary_grammar to point at a multi-symbol cascade grammar; falls
+    // back to legacy when cascade returns empty.
+    cascadeFirstPipeline?: boolean
   }): Promise<HybridSearchResult> {
     const body: Record<string, unknown> = {
       bonfire_id: args.bonfireId,
@@ -665,6 +726,23 @@ export class BonfiresClient {
     if (args.enrichFromTopChunk !== undefined) body.enrich_from_top_chunk = args.enrichFromTopChunk
     if (args.enrichedFanout !== undefined) body.enriched_fanout = args.enrichedFanout
     if (args.enrichMinCenters !== undefined) body.enrich_min_centers = args.enrichMinCenters
+    if (args.enrichRequireEntityLane !== undefined)
+      body.enrich_require_entity_lane = args.enrichRequireEntityLane
+    if (args.enrichMaxCommunityCos !== undefined)
+      body.enrich_max_community_cos = args.enrichMaxCommunityCos
+    if (args.enrichQuestionShapeGate !== undefined)
+      body.enrich_question_shape_gate = args.enrichQuestionShapeGate
+    if (args.enrichChunksSearch !== undefined) body.enrich_chunks_search = args.enrichChunksSearch
+    if (args.mmrDiversify !== undefined) body.mmr_diversify = args.mmrDiversify
+    if (args.mmrLambda !== undefined) body.mmr_lambda = args.mmrLambda
+    if (args.mmrEdges !== undefined) body.mmr_edges = args.mmrEdges
+    if (args.mmrEdgesLambda !== undefined) body.mmr_edges_lambda = args.mmrEdgesLambda
+    if (args.disambiguatedKgScopes !== undefined)
+      body.disambiguated_kg_scopes = args.disambiguatedKgScopes
+    if (args.presearchTarget !== undefined) body.presearch_target = args.presearchTarget
+    if (args.presearchSource !== undefined) body.presearch_source = args.presearchSource
+    if (args.cascadeFirstPipeline !== undefined)
+      body.cascade_first_pipeline = args.cascadeFirstPipeline
     return this.req<HybridSearchResult>("POST", "/search/hybrid", body)
   }
 
