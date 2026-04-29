@@ -10,6 +10,9 @@ interface IngestArgs {
   benchmark?: string
   runId: string
   force?: boolean
+  limit?: number
+  concurrency?: number
+  phases?: ("ingest" | "indexing")[]
 }
 
 function generateRunId(): string {
@@ -32,6 +35,12 @@ export function parseIngestArgs(args: string[]): IngestArgs | null {
       parsed.runId = args[++i]
     } else if (arg === "--force") {
       parsed.force = true
+    } else if (arg === "-l" || arg === "--limit") {
+      parsed.limit = parseInt(args[++i], 10)
+    } else if (arg === "-c" || arg === "--concurrency") {
+      parsed.concurrency = parseInt(args[++i], 10)
+    } else if (arg === "--phases") {
+      parsed.phases = args[++i].split(",").map((s) => s.trim()) as ("ingest" | "indexing")[]
     }
   }
 
@@ -105,10 +114,25 @@ export async function ingestCommand(args: string[]): Promise<void> {
     }
   }
 
-  await orchestrator.ingest({
-    provider: parsed.provider as ProviderName,
-    benchmark: parsed.benchmark as BenchmarkName,
-    runId: parsed.runId,
-    force: parsed.force,
-  })
+  if (parsed.phases) {
+    await orchestrator.run({
+      provider: parsed.provider as ProviderName,
+      benchmark: parsed.benchmark as BenchmarkName,
+      runId: parsed.runId,
+      force: parsed.force,
+      sampling: parsed.limit ? { mode: "limit", limit: parsed.limit } : undefined,
+      concurrency: parsed.concurrency ? { default: parsed.concurrency } : undefined,
+      phases: parsed.phases,
+      judgeModel: "gpt-4o",
+    })
+  } else {
+    await orchestrator.ingest({
+      provider: parsed.provider as ProviderName,
+      benchmark: parsed.benchmark as BenchmarkName,
+      runId: parsed.runId,
+      force: parsed.force,
+      sampling: parsed.limit ? { mode: "limit", limit: parsed.limit } : undefined,
+      concurrency: parsed.concurrency ? { default: parsed.concurrency } : undefined,
+    })
+  }
 }

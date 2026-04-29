@@ -11,7 +11,7 @@ export interface ModelConfig {
 export const MODEL_CONFIGS: Record<string, ModelConfig> = {
   // OpenAI - Standard models (support temperature)
   "gpt-4o": {
-    id: "gpt-4o",
+    id: "openai/gpt-4o",
     provider: "openai",
     displayName: "GPT-4o (Legacy)",
     supportsTemperature: true,
@@ -20,7 +20,7 @@ export const MODEL_CONFIGS: Record<string, ModelConfig> = {
     defaultMaxTokens: 1000,
   },
   "gpt-4o-mini": {
-    id: "gpt-4o-mini",
+    id: "openai/gpt-4o-mini",
     provider: "openai",
     displayName: "GPT-4o Mini (Legacy)",
     supportsTemperature: true,

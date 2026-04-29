@@ -9,9 +9,14 @@ export interface StackMessage {
   text: string
   userId: string
   chatId: string
-  timestamp: string   // ISO 8601
-  role: string        // "user" / "assistant" / "agent"
-  username?: string   // display name of speaker (e.g., "Caroline") — optional
+  timestamp: string // ISO 8601
+  role: string // "user" / "assistant" / "agent"
+  username?: string // display name of speaker (e.g., "Caroline") — optional
+  /** Stack V2 — partitions a multi-session stack into one episode batch
+   *  per session. When omitted, delve falls back to chatId so V1 ingestion
+   *  is unchanged. Set this when pushing N sessions through one stackProcess
+   *  call (BONFIRES_STACK_V2=1 mode). */
+  sessionId?: string
   /** Per-message metadata propagated to Mongo's Message.metadata dict.
    * Recognized keys (read by delve):
    *   preserve_messages: true  → opt-in for JSON-structured episode output
@@ -100,6 +105,24 @@ export interface ChunksSearchHit {
   }
 }
 
+/** Response shape from `POST /search/hybrid` (v32 unified endpoint).
+ * Composes chunks + entities + edges + hub_facts in one payload.
+ * Mirrors HybridSearchResponse on the delve side. */
+export interface HybridSearchResult {
+  chunks: ChunksSearchHit[]
+  entities: KgDelveEntity[]
+  edges: KgDelveEdge[]
+  hub_facts: Array<{ text: string; kind: string; score: number | null }>
+  debug: {
+    mode: "raw" | "enriched" | "enriched_gated" | "fanout"
+    kg_query_used: string | null
+    seed_chunk_id: string | null
+    seed_accepted: boolean
+    seed_overlap_tokens: string[]
+    elapsed_ms: Record<string, number>
+  }
+}
+
 export type BonfiresArm =
   | "vector"
   | "graph"
@@ -109,6 +132,8 @@ export type BonfiresArm =
   | "smart_naked"
   | "smart_chunks_only"
   | "smart_unified"
+  | "smart_cascade"
+  | "smart_hybrid"
   | "zep"
 
 export interface BonfiresConfig {

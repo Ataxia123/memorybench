@@ -35,17 +35,25 @@ function selectQuestionsBySampling(
   allQuestions: { questionId: string; questionType: string }[],
   sampling: SamplingConfig
 ): string[] {
+  // Optional prefix filter for running a single LoCoMo conversation:
+  //   LOCOMO_CONV=conv-30 bun run ... -l 105
+  // Applied before limit/sample so the limit counts against the filtered pool.
+  const convFilter = process.env.LOCOMO_CONV
+  const pool = convFilter
+    ? allQuestions.filter((q) => q.questionId.startsWith(`${convFilter}-`))
+    : allQuestions
+
   if (sampling.mode === "full") {
-    return allQuestions.map((q) => q.questionId)
+    return pool.map((q) => q.questionId)
   }
 
   if (sampling.mode === "limit" && sampling.limit) {
-    return allQuestions.slice(0, sampling.limit).map((q) => q.questionId)
+    return pool.slice(0, sampling.limit).map((q) => q.questionId)
   }
 
   if (sampling.mode === "sample" && sampling.perCategory) {
     const byType: Record<string, { questionId: string; questionType: string }[]> = {}
-    for (const q of allQuestions) {
+    for (const q of pool) {
       if (!byType[q.questionType]) byType[q.questionType] = []
       byType[q.questionType].push(q)
     }
@@ -62,7 +70,7 @@ function selectQuestionsBySampling(
     return selected
   }
 
-  return allQuestions.map((q) => q.questionId)
+  return pool.map((q) => q.questionId)
 }
 
 export class Orchestrator {

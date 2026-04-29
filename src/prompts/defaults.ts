@@ -7,6 +7,27 @@ export function buildDefaultAnswerPrompt(
 ): string {
   const contextStr = buildContextString(context)
 
+  // MEMBENCH_PROMPT=v2 switches to the abstention-first prompt (same
+  // rules, stronger wording on "I don't know"). Kept env-gated so
+  // in-flight runs and historic baselines use the original v1 prompt.
+  if (process.env.MEMBENCH_PROMPT === "v2") {
+    return `You are a question-answering system. Based ONLY on the retrieved context below, answer the question.
+
+Question: ${question}
+Question Date: ${questionDate || "Not specified"}
+
+Retrieved Context:
+${contextStr}
+
+Rules:
+1. If the context does not clearly support an answer, respond "I don't know". Being cautious is correct — do not guess or infer beyond what the context directly states.
+2. Only use information from the retrieved context. Do not use outside knowledge.
+3. If a date is relevant, use the Question Date as reference and any event_time fields in the context to reason about timing.
+4. Answer concisely — a single fact when possible, a short phrase otherwise.
+
+Answer:`
+  }
+
   return `You are a question-answering system. Based on the retrieved context below, answer the question.
 
 Question: ${question}
