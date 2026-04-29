@@ -630,6 +630,15 @@ export class BonfiresClient {
     // round-trip + 2x kgDelve cost; benefits from deduplication before
     // the final unified rerank.
     enrichedFanout?: boolean
+    // Confidence-gate for enrichFromTopChunk / enrichedFanout. When >0,
+    // the server only runs enrichment if the pass-0 top-1 chunk has at
+    // least this many distinct extracted entities in
+    // chunk.metadata.entities (summed across all type buckets). 0 (default)
+    // = legacy: always enrich when the flag is on. Recommended: 3 — keeps
+    // enrichment on multi-hop / aggregate queries (information-rich top-1)
+    // and skips on vague single-hop pleasantries that dilute the enriched
+    // query. Ignored when both enrichFromTopChunk and enrichedFanout are off.
+    enrichMinCenters?: number
   }): Promise<HybridSearchResult> {
     const body: Record<string, unknown> = {
       bonfire_id: args.bonfireId,
@@ -655,6 +664,7 @@ export class BonfiresClient {
     if (args.nowDate !== undefined) body.now_date = args.nowDate
     if (args.enrichFromTopChunk !== undefined) body.enrich_from_top_chunk = args.enrichFromTopChunk
     if (args.enrichedFanout !== undefined) body.enriched_fanout = args.enrichedFanout
+    if (args.enrichMinCenters !== undefined) body.enrich_min_centers = args.enrichMinCenters
     return this.req<HybridSearchResult>("POST", "/search/hybrid", body)
   }
 

@@ -441,6 +441,13 @@ export async function armSearch(args: {
         // server-side; ignored when pass-0 returns no chunks. Costs +1 chunks_search
         // round-trip + 2x kgDelve cost; off by default.
         const enrichedFanout = process.env.BONFIRES_ENRICHED_FANOUT === "1"
+        // Confidence-gate threshold for enrichment (server-side). When >0,
+        // delve only enriches if the pass-0 top-1 chunk has at least this
+        // many distinct extracted entities in metadata.entities. Recommended
+        // value: 3 — keeps enrichment on multi-hop questions (information-
+        // rich top-1) and skips on vague single-hop pleasantries that dilute
+        // the enriched query. 0 (default) = legacy always-enrich behavior.
+        const enrichMinCenters = parseInt(process.env.BONFIRES_ENRICH_MIN_CENTERS ?? "0", 10)
 
         const res = await client.hybridSearch({
           bonfireId: config.bonfireId,
@@ -458,6 +465,7 @@ export async function armSearch(args: {
           unifiedRerankTopN: finalRerankTopN,
           enrichFromTopChunk,
           enrichedFanout,
+          enrichMinCenters,
           nowDate,
         })
 
