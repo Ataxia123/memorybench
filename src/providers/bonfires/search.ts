@@ -433,6 +433,14 @@ export async function armSearch(args: {
         // top-1's kg_entity_uuid is also threaded into graphiti as an additional BFS
         // center seed. Costs +1 chunks_search round-trip; off by default for back-compat.
         const enrichFromTopChunk = process.env.BONFIRES_ENRICH_FROM_TOP_CHUNK === "1"
+        // Parallel raw+enriched fanout (server-side flag). When
+        // BONFIRES_ENRICHED_FANOUT=1 the delve server runs BOTH the raw and the
+        // top-1-chunk-enriched query paths in parallel and unions the results
+        // before the unified rerank. Combines raw's temporal/single-hop precision
+        // with enriched's aggregate/multi-hop expansion. Implies enrich-from-top-chunk
+        // server-side; ignored when pass-0 returns no chunks. Costs +1 chunks_search
+        // round-trip + 2x kgDelve cost; off by default.
+        const enrichedFanout = process.env.BONFIRES_ENRICHED_FANOUT === "1"
 
         const res = await client.hybridSearch({
           bonfireId: config.bonfireId,
@@ -449,6 +457,7 @@ export async function armSearch(args: {
           unifiedRerank: useFinalRerank,
           unifiedRerankTopN: finalRerankTopN,
           enrichFromTopChunk,
+          enrichedFanout,
           nowDate,
         })
 

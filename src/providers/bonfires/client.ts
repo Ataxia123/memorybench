@@ -622,6 +622,14 @@ export class BonfiresClient {
     // but improves aggregate / multi-hop questions where the top chunk
     // surfaces a known entity that the raw query embedding misses.
     enrichFromTopChunk?: boolean
+    // Run BOTH the raw and enriched (top-1-chunk-derived) query paths in
+    // parallel and union the results before unified rerank. Combines
+    // raw's temporal/single-hop precision with enriched's aggregate/
+    // multi-hop expansion. Implies enrichFromTopChunk=true server-side;
+    // ignores it if pass-0 returns no chunks. Costs +1 chunks_search
+    // round-trip + 2x kgDelve cost; benefits from deduplication before
+    // the final unified rerank.
+    enrichedFanout?: boolean
   }): Promise<HybridSearchResult> {
     const body: Record<string, unknown> = {
       bonfire_id: args.bonfireId,
@@ -646,6 +654,7 @@ export class BonfiresClient {
     if (args.rerankScopes !== undefined) body.rerank_scopes = args.rerankScopes
     if (args.nowDate !== undefined) body.now_date = args.nowDate
     if (args.enrichFromTopChunk !== undefined) body.enrich_from_top_chunk = args.enrichFromTopChunk
+    if (args.enrichedFanout !== undefined) body.enriched_fanout = args.enrichedFanout
     return this.req<HybridSearchResult>("POST", "/search/hybrid", body)
   }
 
