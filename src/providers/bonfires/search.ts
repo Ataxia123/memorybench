@@ -527,6 +527,12 @@ export async function armSearch(args: {
         // at a multi-symbol cascade grammar; falls back to legacy when
         // cascade returns empty. Independent of all other flags above.
         const cascadeFirstPipeline = process.env.BONFIRES_CASCADE_FIRST_PIPELINE === "1"
+        // Slim payload — strip fields the bench doesn't read so FastAPI
+        // doesn't pay pydantic-validation + JSON-encode on multi-KB
+        // metadata / debug. Default on; opt out via
+        // BONFIRES_HYBRID_RESPONSE_LEAN=0 if a debug session needs the
+        // full payload (elapsed_ms, gate state, chunk metadata blobs).
+        const responseLean = process.env.BONFIRES_HYBRID_RESPONSE_LEAN !== "0"
 
         const res = await client.hybridSearch({
           bonfireId: config.bonfireId,
@@ -557,6 +563,7 @@ export async function armSearch(args: {
           presearchTarget,
           presearchSource,
           cascadeFirstPipeline,
+          responseLean,
           nowDate,
         })
 

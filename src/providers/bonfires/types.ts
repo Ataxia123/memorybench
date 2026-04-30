@@ -122,7 +122,15 @@ export interface UnifiedRerankItem {
  * Mirrors HybridSearchResponse on the delve side. When the request sets
  * unified_rerank=True the server additionally populates `unified_results`
  * with a CE-ranked flat top-N across all kinds; per-kind arrays remain
- * populated unchanged for back-compat. */
+ * populated unchanged for back-compat.
+ *
+ * Lean mode (`response_lean=true`) trims server-side reasoning fields the
+ * bench doesn't read: chunk summary + heavy chunk metadata, entity
+ * `attributes` / `bonfire_id`, edge `attributes` / `episodes` /
+ * `created_at` / `invalid_at` / `expired_at`, unified_results `id` /
+ * `metadata`, and most of debug except mode/seed_chunk_id/seed_accepted/
+ * kg_query_used. Optional fields below cover both lean and full shapes.
+ */
 export interface HybridSearchResult {
   chunks: ChunksSearchHit[]
   entities: KgDelveEntity[]
@@ -134,8 +142,10 @@ export interface HybridSearchResult {
     kg_query_used: string | null
     seed_chunk_id: string | null
     seed_accepted: boolean
-    seed_overlap_tokens: string[]
-    elapsed_ms: Record<string, number>
+    /** Present only in full (non-lean) responses. */
+    seed_overlap_tokens?: string[]
+    /** Present only in full (non-lean) responses. */
+    elapsed_ms?: Record<string, number>
   }
 }
 

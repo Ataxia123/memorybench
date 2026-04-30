@@ -700,6 +700,13 @@ export class BonfiresClient {
     // primary_grammar to point at a multi-symbol cascade grammar; falls
     // back to legacy when cascade returns empty.
     cascadeFirstPipeline?: boolean
+    // Slim the response — drops fields the bench doesn't read (chunk
+    // summary + heavy chunk metadata, entity attributes, edge attributes,
+    // unified_results id/metadata, debug elapsed_ms / overlap tokens /
+    // gate counters) to cut FastAPI serialization cost. Default true:
+    // none of the bench's smart_hybrid render path reads the dropped
+    // fields. Set BONFIRES_HYBRID_RESPONSE_LEAN=0 to disable for debug.
+    responseLean?: boolean
   }): Promise<HybridSearchResult> {
     const body: Record<string, unknown> = {
       bonfire_id: args.bonfireId,
@@ -743,6 +750,7 @@ export class BonfiresClient {
     if (args.presearchSource !== undefined) body.presearch_source = args.presearchSource
     if (args.cascadeFirstPipeline !== undefined)
       body.cascade_first_pipeline = args.cascadeFirstPipeline
+    if (args.responseLean !== undefined) body.response_lean = args.responseLean
     return this.req<HybridSearchResult>("POST", "/search/hybrid", body)
   }
 
