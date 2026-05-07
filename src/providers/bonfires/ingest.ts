@@ -50,6 +50,7 @@ export async function ingestSessions(args: {
       timestamp: m.timestamp ?? sessionDate ?? null,
       role: m.role,
       msg_id: `m${i}`,
+      ...(m.metadata ? { metadata: m.metadata } : {}),
     }))
 
     await client.ingestContent({

@@ -70,7 +70,11 @@ function buildStructuredContextString(context: unknown[]): string {
   const episodes: string[] = []
   const communities: string[] = []
   const other: string[] = []
+  // No rank prefix — v77h proved [rank N] labels make GPT-4o overly
+  // cautious (extra "I don't know" answers on world-knowledge) and
+  // over-confident on weak adversarial evidence. Plain bullets.
   for (const h of hits) {
+    if (!h?.text) continue
     const line = `  - ${h.text}`
     switch (h.kind) {
       case "chunk":
@@ -100,6 +104,68 @@ function buildStructuredContextString(context: unknown[]): string {
   if (communities.length) parts.push(`<COMMUNITIES>\n${communities.join("\n")}\n</COMMUNITIES>`)
   if (other.length) parts.push(`<OTHER>\n${other.join("\n")}\n</OTHER>`)
   return parts.join("\n\n")
+}
+
+// RANKED_PROMPTS — flat numbered list in cross-encoder rerank order, no
+// kind tags. The LLM is told the list is sorted by relevance: item #1
+// is the highest-scoring evidence, regardless of whether it's a
+// chunk/fact/entity. Mixing kinds preserves the cross-rank signal that
+// section-grouping destroys (a fact at rerank rank 1 was the most
+// relevant evidence even if 9 chunks are present in the pool).
+function buildRankedContextString(context: unknown[]): string {
+  const hits = context as SearchHit[]
+  const lines: string[] = []
+  for (let i = 0; i < hits.length; i++) {
+    const h = hits[i]
+    if (!h?.text) continue
+    lines.push(`${i + 1}. ${h.text}`)
+  }
+  return lines.join("\n")
+}
+
+const RANKED_PROMPTS: ProviderPrompts = {
+  answerPrompt: (question, context, questionDate) => {
+    const contextStr = buildRankedContextString(context)
+    return `Answer the question using only the context below.
+
+Context (numbered list, ordered by relevance — item #1 is most relevant, item N least):
+${contextStr}
+
+Question Date: ${questionDate || "Not specified"}
+Question: ${question}
+
+Rules:
+1. Use ONLY the context. No outside knowledge.
+2. Items earlier in the list are more relevant; weight them more heavily when they conflict.
+3. Refuse with "I don't know" ONLY when the context contains literally
+   zero information bearing on any aspect of the question. If even one
+   keyword from the question or its expected answer-type appears, commit
+   to an answer. Hedge with "Based on the context, likely…" if evidence
+   is partial, but always commit. Refusal on a question with any
+   relevant context is always wrong.
+4. When the question asks for a specific named thing (place, person,
+   title, object) and the context contains that exact phrase, prefer
+   the exact phrase. When the question asks for an explanation/list/
+   relationship, synthesize freely from multiple items.
+5. List questions (what/which X has Y done): enumerate EVERY distinct
+   item that appears — do not collapse synonyms or skip items.
+6. Hypothetical questions (would/is X likely): infer from documented behaviors.
+7. For dates, use Question Date + event_time fields. Convert relative
+   time references ("yesterday", "last week") into specific dates using
+   event_time + Question Date. Show the arithmetic.
+8. Timestamps in memories represent the actual event time, NOT the
+   conversation-mention time. If "(event_time: 2023-03-15) I went to
+   the vet yesterday" and question is "when did I go to the vet?",
+   answer is 2023-03-15.
+9. When two items contradict on the same fact, prefer the one with the
+   most recent event_time.
+10. Be specific about people, places, and events — name them.
+11. Match answer length to question shape — single nouns/short phrases
+    for "what is X" / "where is X", comma-separated lists for
+    enumeration, one short sentence for "why" / "how". No commentary.
+
+Answer:`
+  },
 }
 
 const STRUCTURED_PROMPTS: ProviderPrompts = {
@@ -224,6 +290,7 @@ Answer:`
   },
 }
 import { armSearch } from "./search.js"
+import { humanizeHits } from "./dateHumanize.js"
 
 /** Per-bonfire dedup cache written to disk so multiple `bun run` invocations
  * against the same bonfire skip re-ingest and re-indexing. Essential when
@@ -269,7 +336,9 @@ export class BonfiresProvider implements Provider {
       ? BONFIRES_PROMPTS
       : process.env.BONFIRES_PROMPT === "flat"
         ? undefined
-        : STRUCTURED_PROMPTS
+        : process.env.BONFIRES_PROMPT === "ranked"
+          ? RANKED_PROMPTS
+          : STRUCTURED_PROMPTS
   private client!: BonfiresClient
   private config!: BonfiresConfig
   private agentId!: string
@@ -419,12 +488,22 @@ export class BonfiresProvider implements Provider {
   }
 
   async search(query: string, _options: SearchOptions): Promise<unknown[]> {
-    return armSearch({
+    const hits = await armSearch({
       client: this.client,
       query,
       config: this.config,
       nowDate: this.computeNowDate(),
     })
+    // Date-rendering pre-processor (BONFIRES_HUMANIZE_DATES, default ON).
+    // Rewrites ISO timestamps embedded in fact/edge/entity/episode text to
+    // human-readable forms before the answer LLM sees them. Recovers
+    // questions like q73 ("September 2023") where retrieval was perfect
+    // but the LLM failed to convert "2023-09-01T00:00:00+00:00" to
+    // "September 2023". Disable with BONFIRES_HUMANIZE_DATES=0 for A/B.
+    if (process.env.BONFIRES_HUMANIZE_DATES === "0") {
+      return hits
+    }
+    return humanizeHits(hits as Array<{ text: string; kind?: string }>) as unknown[]
   }
 
   /** Resolve the ``YYYY-MM-DD`` reference "now" for temporal auxiliary

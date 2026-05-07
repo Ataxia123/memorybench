@@ -159,11 +159,22 @@ export class LoCoMoBenchmark implements Benchmark {
       const messages = conv[sessionKey] as LoCoMoMessage[]
       if (!Array.isArray(messages)) continue
 
-      const unifiedMessages: UnifiedMessage[] = messages.map((m) => ({
-        role: m.speaker === speakerA ? ("user" as const) : ("assistant" as const),
-        content: m.text,
-        speaker: m.speaker,
-      }))
+      const unifiedMessages: UnifiedMessage[] = []
+      for (const m of messages) {
+        unifiedMessages.push({
+          role: m.speaker === speakerA ? ("user" as const) : ("assistant" as const),
+          content: m.text,
+          speaker: m.speaker,
+        })
+        if (m.blip_caption && process.env.LOCOMO_INCLUDE_IMAGE_CAPTIONS === "1") {
+          unifiedMessages.push({
+            role: m.speaker === speakerA ? ("user" as const) : ("assistant" as const),
+            content: `[image] ${m.blip_caption}${m.query ? ` (intent: ${m.query})` : ""}`,
+            speaker: m.speaker,
+            metadata: { kind: "image_caption", parent_dia_id: m.dia_id, img_url: m.img_url ?? [] },
+          })
+        }
+      }
 
       const rawDate = conv[dateKey] as string | undefined
       const parsedDate = rawDate ? parseLocomoDate(rawDate) : null

@@ -700,6 +700,27 @@ export class BonfiresClient {
     // primary_grammar to point at a multi-symbol cascade grammar; falls
     // back to legacy when cascade returns empty.
     cascadeFirstPipeline?: boolean
+    // Corpus-aware pipeline routing mode. Forwarded as the
+    // `pipeline_routing` request field. "legacy" (default) preserves
+    // pre-router behavior — `cascadeFirstPipeline` decides. "auto"
+    // invokes the server's QueryRouter (ngram-DF + spaCy-triple
+    // presence over the bonfire corpus) per-query to pick chunks-first
+    // vs cascade-first. "force_chunks_first" / "force_cascade_first"
+    // bypass the router for A/B testing. The decision is surfaced in
+    // `debug.router_decision` / `debug.router_reason` /
+    // `debug.router_signals`.
+    pipelineRouting?: "legacy" | "auto" | "force_chunks_first" | "force_cascade_first"
+    // Hub-walk lane: routes the query through Person/PreferenceHub/TopicHub
+    // anchors and runs a 1-hop BFS with cosine cutoff + GLiNER-typed-bucket
+    // pruning. Surfaces typed neighbors (Pet, Item, Activity, etc.) in the
+    // unified rerank pool with kind="hub_walk". Default false.
+    includeHubWalk?: boolean
+    // v74: replace double chunks_search with picker-vs-top-chunk enrichment.
+    // ONE chunks_search per query; enrichment seed = picker.chunk when
+    // _semantic_seed_pick fires, else chunks_pool[0] (v40-ATH fallback),
+    // else no enrichment. Server gates on BOTH this flag AND env
+    // BONFIRES_PICKER_OR_CHUNK_ENRICH=1; either alone keeps v73 behavior.
+    pickerOrChunkEnrich?: boolean
     // Slim the response — drops fields the bench doesn't read (chunk
     // summary + heavy chunk metadata, entity attributes, edge attributes,
     // unified_results id/metadata, debug elapsed_ms / overlap tokens /
@@ -750,7 +771,11 @@ export class BonfiresClient {
     if (args.presearchSource !== undefined) body.presearch_source = args.presearchSource
     if (args.cascadeFirstPipeline !== undefined)
       body.cascade_first_pipeline = args.cascadeFirstPipeline
+    if (args.pipelineRouting !== undefined) body.pipeline_routing = args.pipelineRouting
     if (args.responseLean !== undefined) body.response_lean = args.responseLean
+    if (args.includeHubWalk !== undefined) body.include_hub_walk = args.includeHubWalk
+    if (args.pickerOrChunkEnrich !== undefined)
+      body.picker_or_chunk_enrich = args.pickerOrChunkEnrich
     return this.req<HybridSearchResult>("POST", "/search/hybrid", body)
   }
 
@@ -765,6 +790,7 @@ export class BonfiresClient {
       timestamp?: string | null
       role?: string | null
       msg_id?: string | null
+      metadata?: Record<string, unknown>
     }>
   }): Promise<unknown> {
     const body: Record<string, unknown> = {

@@ -527,12 +527,34 @@ export async function armSearch(args: {
         // at a multi-symbol cascade grammar; falls back to legacy when
         // cascade returns empty. Independent of all other flags above.
         const cascadeFirstPipeline = process.env.BONFIRES_CASCADE_FIRST_PIPELINE === "1"
+        // Corpus-aware pipeline routing mode. "legacy" (default)
+        // preserves the cascadeFirstPipeline-driven dispatch. "auto"
+        // invokes the server's QueryRouter per-query. "force_*" bypass
+        // the router for A/B testing without restarting the server.
+        const pipelineRoutingEnv = process.env.BONFIRES_PIPELINE_ROUTING
+        const pipelineRouting:
+          | "legacy"
+          | "auto"
+          | "force_chunks_first"
+          | "force_cascade_first"
+          | undefined =
+          pipelineRoutingEnv === "auto" ||
+          pipelineRoutingEnv === "force_chunks_first" ||
+          pipelineRoutingEnv === "force_cascade_first" ||
+          pipelineRoutingEnv === "legacy"
+            ? pipelineRoutingEnv
+            : undefined
         // Slim payload — strip fields the bench doesn't read so FastAPI
         // doesn't pay pydantic-validation + JSON-encode on multi-KB
         // metadata / debug. Default on; opt out via
         // BONFIRES_HYBRID_RESPONSE_LEAN=0 if a debug session needs the
         // full payload (elapsed_ms, gate state, chunk metadata blobs).
         const responseLean = process.env.BONFIRES_HYBRID_RESPONSE_LEAN !== "0"
+        const smart = process.env.BONFIRES_HYBRID_SMART !== "0"
+        const searchRecipeEnv = process.env.BONFIRES_SEARCH_RECIPE
+        const includeHubWalk = process.env.BONFIRES_INCLUDE_HUB_WALK === "1" ? true : undefined
+        const pickerOrChunkEnrich =
+          process.env.BONFIRES_PICKER_OR_CHUNK_ENRICH === "1" ? true : undefined
 
         const res = await client.hybridSearch({
           bonfireId: config.bonfireId,
@@ -541,6 +563,8 @@ export async function armSearch(args: {
           topKEntities: entitiesLimit,
           topKFacts: factsLimit,
           mode: hybridMode,
+          smart,
+          searchRecipe: searchRecipeEnv,
           rerank: useHybridRerank,
           rerankTopN: parseInt(
             process.env.BONFIRES_HYBRID_RERANK_TOP_N ?? String(Math.max(entitiesLimit, factsLimit)),
@@ -563,7 +587,10 @@ export async function armSearch(args: {
           presearchTarget,
           presearchSource,
           cascadeFirstPipeline,
+          pipelineRouting,
           responseLean,
+          includeHubWalk,
+          pickerOrChunkEnrich,
           nowDate,
         })
 
@@ -575,7 +602,7 @@ export async function armSearch(args: {
             text: item.text,
             score: item.score,
             kind:
-              item.kind === "hub_fact"
+              item.kind === "hub_fact" || item.kind === "hub_walk"
                 ? ("fact" as const)
                 : (item.kind as "fact" | "entity" | "chunk"),
           }))

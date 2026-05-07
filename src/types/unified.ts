@@ -11,6 +11,7 @@ export interface UnifiedMessage {
   content: string
   timestamp?: string
   speaker?: string
+  metadata?: Record<string, unknown>
 }
 
 export interface UnifiedSession {

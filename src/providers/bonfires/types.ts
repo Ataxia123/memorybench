@@ -112,7 +112,7 @@ export interface ChunksSearchHit {
 export interface UnifiedRerankItem {
   text: string
   score: number
-  kind: "chunk" | "entity" | "fact" | "hub_fact"
+  kind: "chunk" | "entity" | "fact" | "hub_fact" | "hub_walk"
   id: string
   metadata: Record<string, unknown>
 }
