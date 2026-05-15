@@ -16,7 +16,8 @@ export interface SearchHit {
    *  <FACTS> vs <ENTITIES> sections. "fact" = edges (relationship claims
    *  with valid_at), "entity" = nodes (name + summary). Optional — hits
    *  without a kind fall through as "other" (treated as facts). */
-  kind?: "fact" | "entity" | "episode" | "community" | "chunk"
+  kind?: "fact" | "claim" | "entity" | "episode" | "community" | "chunk" | "answer_hint"
+  metadata?: Record<string, unknown>
 }
 
 export function flattenFacts(result: KgDelveResult): SearchHit[] {
@@ -24,10 +25,92 @@ export function flattenFacts(result: KgDelveResult): SearchHit[] {
   return edges.map((e) => ({ text: e.fact, score: e.score ?? null, kind: "fact" as const }))
 }
 
+function orderedHypermemHits(
+  outputType: string,
+  hits: {
+    topics: SearchHit[]
+    episodes: SearchHit[]
+    facts: SearchHit[]
+    evidence: SearchHit[]
+  }
+): SearchHit[] {
+  const bits = /^[01]{3}$/.test(outputType) ? outputType : "011"
+  const order = process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER ?? "canonical"
+  const includeEvidence = process.env.BONFIRES_HYPERMEM_INCLUDE_EVIDENCE !== "0"
+  const out: SearchHit[] = []
+  if (order === "score") {
+    if (bits[0] === "1") out.push(...hits.topics)
+    if (bits[1] === "1") out.push(...hits.episodes)
+    if (bits[2] === "1") out.push(...hits.facts)
+    if (includeEvidence) out.push(...hits.evidence)
+    return out.sort((a, b) => (b.score ?? Number.NEGATIVE_INFINITY) - (a.score ?? Number.NEGATIVE_INFINITY))
+  }
+  if (order === "facts_first") {
+    if (bits[2] === "1") out.push(...hits.facts)
+    if (includeEvidence) out.push(...hits.evidence)
+    if (bits[1] === "1") out.push(...hits.episodes)
+    if (bits[0] === "1") out.push(...hits.topics)
+    return out
+  }
+  if (bits[0] === "1") out.push(...hits.topics)
+  if (bits[1] === "1") out.push(...hits.episodes)
+  if (bits[2] === "1") out.push(...hits.facts)
+  if (includeEvidence) out.push(...hits.evidence)
+  return out
+}
+
+const HYPERMEM_METADATA_SCALAR_KEYS = [
+  "id",
+  "topic_id",
+  "source_type",
+  "source_episode_id",
+  "temporal",
+  "timestamp",
+  "point_score",
+  "confidence",
+  "importance_weight",
+  "graph_edge_uuid",
+  "fact_uuid",
+  "episode_uuid",
+  "subject",
+  "title",
+] as const
+
+const HYPERMEM_METADATA_LIST_KEYS = [
+  "episode_ids",
+  "topic_ids",
+  "keywords",
+  "query_patterns",
+  "potential_queries",
+  "participants",
+  "user_ids",
+  "topic_route",
+] as const
+
+function slimHypermemMetadata(data: Record<string, unknown> | undefined): Record<string, unknown> {
+  if (!data) return {}
+  const out: Record<string, unknown> = {}
+  for (const key of HYPERMEM_METADATA_SCALAR_KEYS) {
+    const value = data[key]
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      out[key] = value
+    }
+  }
+  for (const key of HYPERMEM_METADATA_LIST_KEYS) {
+    const value = data[key]
+    if (Array.isArray(value)) {
+      out[key] = value
+        .filter((item) => typeof item === "string" || typeof item === "number" || typeof item === "boolean")
+        .slice(0, key === "keywords" ? 24 : 12)
+    }
+  }
+  return out
+}
+
 export async function armSearch(args: {
   client: Pick<
     BonfiresClient,
-    "vectorSearch" | "kgDelve" | "chunksSearch" | "hubTraversal" | "hybridSearch"
+    "vectorSearch" | "kgDelve" | "chunksSearch" | "hubTraversal" | "hybridSearch" | "hypermemSearch"
   >
   query: string
   config: BonfiresConfig
@@ -39,6 +122,100 @@ export async function armSearch(args: {
   const { client, query, config, nowDate } = args
   try {
     switch (config.arm) {
+      case "hypermem": {
+        const outputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE ?? "011"
+        const r = await client.hypermemSearch({
+          bonfireId: config.bonfireId,
+          query,
+          profile: process.env.BONFIRES_HYPERMEM_PROFILE ?? "nlp_taxonomy_v1",
+          initialCandidates: parseInt(process.env.BONFIRES_HYPERMEM_INITIAL_CANDIDATES ?? "100", 10),
+          topicTopK: parseInt(process.env.BONFIRES_HYPERMEM_TOPIC_TOP_K ?? "15", 10),
+          episodeTopK: parseInt(process.env.BONFIRES_HYPERMEM_EPISODE_TOP_K ?? "20", 10),
+          factTopK: parseInt(process.env.BONFIRES_HYPERMEM_FACT_TOP_K ?? "30", 10),
+          outputType,
+          useReranker: process.env.BONFIRES_HYPERMEM_RERANKER !== "0",
+        })
+        const facts = (r.facts ?? [])
+          .map((fact) => {
+            const data = fact.data ?? {}
+            const content = String(data.content ?? data.fact ?? data.summary ?? "").trim()
+            // Delve's HyperMem formatter only treats `temporal` as event time.
+            // `timestamp` is node bookkeeping for grammar-derived facts and can
+            // be ingestion time; rendering it poisoned LoCoMo answers with the
+            // benchmark run date.
+            const timestamp = data.temporal
+            return { fact, content, timestamp }
+          })
+          .filter((item) => item.content)
+          .map(({ fact, content, timestamp }) => ({
+            text:
+              timestamp
+                ? `[FACT] ${content} (event_time: ${String(timestamp)})`
+                : `[FACT] ${content}`,
+            score: fact.score ?? null,
+            kind: "fact" as const,
+            metadata: {
+              source: fact.source,
+              hypermem: slimHypermemMetadata(fact.data),
+            },
+          }))
+        const episodes = (r.episodes ?? [])
+          .map((episode) => {
+            const data = episode.data ?? {}
+            const content = String(data.summary ?? data.subject ?? data.episode_description ?? "").trim()
+            const timestamp = data.timestamp
+            return { episode, content, timestamp }
+          })
+          .filter((item) => item.content)
+          .map(({ episode, content, timestamp }) => ({
+            text:
+              timestamp
+                ? `[EPISODE] ${content} (event_time: ${String(timestamp)})`
+                : `[EPISODE] ${content}`,
+            score: episode.score ?? null,
+            kind: "episode" as const,
+            metadata: {
+              hypermem: slimHypermemMetadata(episode.data),
+            },
+          }))
+        const topics = (r.topics ?? [])
+          .map((topic) => {
+            const data = topic.data ?? {}
+            const title = String(data.title ?? "").trim()
+            const summary = String(data.summary ?? "").trim()
+            return { topic, title, summary }
+          })
+          .filter((item) => item.title || item.summary)
+          .map(({ topic, title, summary }) => ({
+            text: `[TOPIC] ${title ? `${title}: ` : ""}${summary}`,
+            score: topic.score ?? null,
+            kind: "community" as const,
+            metadata: {
+              hypermem: slimHypermemMetadata(topic.data),
+            },
+          }))
+        const evidence = (r.evidence ?? [])
+          .map((item) => {
+            const data = item.data ?? {}
+            const content = String(data.content ?? data.fact ?? data.summary ?? "").trim()
+            const timestamp = data.temporal
+            return { item, content, timestamp }
+          })
+          .filter((item) => item.content)
+          .map(({ item, content, timestamp }) => ({
+            text:
+              timestamp
+                ? `[EVIDENCE] ${content} (event_time: ${String(timestamp)})`
+                : `[EVIDENCE] ${content}`,
+            score: item.score ?? null,
+            kind: "fact" as const,
+            metadata: {
+              source: item.source,
+              hypermem: slimHypermemMetadata(item.data),
+            },
+          }))
+        return orderedHypermemHits(outputType, { topics, episodes, facts, evidence })
+      }
       case "smart_chunks_only": {
         // Engram replication — pure hybrid retrieval over the trimtab chunks
         // grammar. No KG calls, no cascade, no vector_store. Tests the
@@ -604,7 +781,7 @@ export async function armSearch(args: {
             kind:
               item.kind === "hub_fact" || item.kind === "hub_walk"
                 ? ("fact" as const)
-                : (item.kind as "fact" | "entity" | "chunk"),
+                : (item.kind as "fact" | "claim" | "entity" | "chunk" | "answer_hint"),
           }))
         }
 

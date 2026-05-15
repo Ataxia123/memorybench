@@ -158,26 +158,29 @@ export class LoCoMoBenchmark implements Benchmark {
 
       const messages = conv[sessionKey] as LoCoMoMessage[]
       if (!Array.isArray(messages)) continue
+      const rawDate = conv[dateKey] as string | undefined
+      const parsedDate = rawDate ? parseLocomoDate(rawDate) : null
+      const baseTime = parsedDate ? Date.parse(parsedDate.iso) : null
 
       const unifiedMessages: UnifiedMessage[] = []
-      for (const m of messages) {
+      for (const [offset, m] of messages.entries()) {
+        const timestamp = baseTime !== null ? new Date(baseTime + offset * 120_000).toISOString() : undefined
         unifiedMessages.push({
           role: m.speaker === speakerA ? ("user" as const) : ("assistant" as const),
           content: m.text,
           speaker: m.speaker,
+          timestamp,
         })
         if (m.blip_caption && process.env.LOCOMO_INCLUDE_IMAGE_CAPTIONS === "1") {
           unifiedMessages.push({
             role: m.speaker === speakerA ? ("user" as const) : ("assistant" as const),
-            content: `[image] ${m.blip_caption}${m.query ? ` (intent: ${m.query})` : ""}`,
+            content: m.blip_caption,
             speaker: m.speaker,
-            metadata: { kind: "image_caption", parent_dia_id: m.dia_id, img_url: m.img_url ?? [] },
+            timestamp,
+            metadata: { kind: "image_caption", parent_dia_id: m.dia_id, image_query: m.query, img_url: m.img_url ?? [] },
           })
         }
       }
-
-      const rawDate = conv[dateKey] as string | undefined
-      const parsedDate = rawDate ? parseLocomoDate(rawDate) : null
 
       sessions.push({
         sessionId: `${item.sample_id}-${sessionKey}`,

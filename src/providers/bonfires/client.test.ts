@@ -1,7 +1,16 @@
 import { describe, it, expect, mock } from "bun:test";
-import { BonfiresClient } from "./client.js";
+import { BonfiresClient, resolveBonfireObjectId } from "./client.js";
 
 describe("BonfiresClient", () => {
+  it("resolves slug bonfire ids to deterministic ObjectIds", () => {
+    expect(resolveBonfireObjectId("hypermem-recall-fast-cache-20260514-1638")).toBe(
+      "d0674f072ef10866646ffea5"
+    );
+    expect(resolveBonfireObjectId("d0674f072ef10866646ffea5")).toBe(
+      "d0674f072ef10866646ffea5"
+    );
+  });
+
   it("healthz hits /healthz with Bearer token", async () => {
     const fetchMock = mock(async () => ({
       ok: true,

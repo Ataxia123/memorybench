@@ -10,7 +10,7 @@ import type {
 } from "../../types/provider.js"
 import type { ProviderPrompts } from "../../types/prompts.js"
 import type { UnifiedSession } from "../../types/unified.js"
-import { BonfiresClient } from "./client.js"
+import { BonfiresClient, resolveBonfireObjectId } from "./client.js"
 import type { BonfiresConfig } from "./types.js"
 import { ingestSessions } from "./ingest.js"
 import { runIndexingPipeline } from "./indexing.js"
@@ -30,6 +30,7 @@ function buildZepContextString(context: unknown[]): string {
   for (const h of hits) {
     const line = `  - ${h.text}`
     switch (h.kind) {
+      case "claim":
       case "fact":
         facts.push(line)
         break
@@ -80,6 +81,7 @@ function buildStructuredContextString(context: unknown[]): string {
       case "chunk":
         chunks.push(line)
         break
+      case "claim":
       case "fact":
         facts.push(line)
         break
@@ -123,6 +125,41 @@ function buildRankedContextString(context: unknown[]): string {
   return lines.join("\n")
 }
 
+export function buildExtractiveContextString(context: unknown[]): string {
+  return buildRankedContextString(context)
+}
+
+export const EXTRACTIVE_PROMPTS: ProviderPrompts = {
+  answerPrompt: (question, context, questionDate) => {
+    const contextStr = buildExtractiveContextString(context)
+    return `Answer the question using only the ranked context below.
+
+Context (ranked by relevance; keep this order):
+${contextStr}
+
+Question Date: ${questionDate || "Not specified"}
+Question: ${question}
+
+Rules:
+1. Return the shortest exact answer supported by the context. No explanation.
+2. Use ranked context order when evidence conflicts; earlier items win.
+3. Prefer exact FACT/claim wording over broad entity or episode summaries.
+4. Ignore answer_hint lines unless there is no factual evidence.
+5. For list questions, include every distinct candidate present in the
+   context, separated by commas. Do not collapse multiple candidates into
+   one broad category.
+6. For date questions, use any "[resolved relative time: ...]" annotation
+   before raw words like "yesterday", "last week", or "this month".
+7. For specific objects, titles, signs, names, places, identities, statuses,
+   or emotions, copy
+   the exact phrase from the context when present.
+8. If the context contains no relevant evidence at all, answer exactly:
+   I don't know
+
+Answer:`
+  },
+}
+
 const RANKED_PROMPTS: ProviderPrompts = {
   answerPrompt: (question, context, questionDate) => {
     const contextStr = buildRankedContextString(context)
@@ -144,15 +181,18 @@ Rules:
    is partial, but always commit. Refusal on a question with any
    relevant context is always wrong.
 4. When the question asks for a specific named thing (place, person,
-   title, object) and the context contains that exact phrase, prefer
-   the exact phrase. When the question asks for an explanation/list/
-   relationship, synthesize freely from multiple items.
+   title, object), identity, status, category, or count and the context
+   contains that exact phrase, prefer the exact phrase from FACTS/claims.
+   Do not answer with a broader related summary when a precise fact exists.
+   When the question asks for an explanation/list/relationship, synthesize
+   freely from multiple factual items.
 5. List questions (what/which X has Y done): enumerate EVERY distinct
    item that appears — do not collapse synonyms or skip items.
 6. Hypothetical questions (would/is X likely): infer from documented behaviors.
-7. For dates, use Question Date + event_time fields. Convert relative
+7. For dates, use explicit "[resolved relative time: ...]" annotations
+   first. Otherwise use Question Date + event_time fields. Convert relative
    time references ("yesterday", "last week") into specific dates using
-   event_time + Question Date. Show the arithmetic.
+   event_time + Question Date. Do not output unresolved relative phrases.
 8. Timestamps in memories represent the actual event time, NOT the
    conversation-mention time. If "(event_time: 2023-03-15) I went to
    the vet yesterday" and question is "when did I go to the vet?",
@@ -201,17 +241,14 @@ Rules:
    that appears in the context — do not collapse synonyms or skip items
    that seem redundant.
 5. Hypothetical questions (would/is X likely): infer from documented behaviors.
-6. Treat all sections as equally authoritative — choose by question shape,
-   not section ordering. CONVERSATION_TURNS and FACTS carry specific
-   timestamped events. ENTITIES carry cross-cutting properties: lists of
-   activities/preferences/symbols, identity descriptions, counts of
-   related people. For "what does X do / what does X like / what is X /
-   how many" questions, the ENTITIES summary is often the synthesized
-   answer — read it carefully and use it.
-7. For dates, use Question Date + event_time fields. Always convert relative
-   time references ("yesterday", "last week", "a few months ago") into
-   specific dates, months, or years using event_time + Question Date.
-   Show the arithmetic when the answer requires it.
+6. FACTS/claims are the primary answer evidence. ENTITIES and EPISODES are
+   supporting summaries; use them to fill missing coverage, but do not let
+   them override a precise fact/claim.
+7. For dates, use explicit "[resolved relative time: ...]" annotations
+   first. Otherwise use Question Date + event_time fields. Always convert
+   relative time references ("yesterday", "last week", "a few months ago")
+   into specific dates, months, or years. Do not output unresolved relative
+   phrases.
 8. Timestamps in memories represent the actual time the event occurred,
    NOT the time the event was mentioned in conversation. If a memory says
    "(event_time: 2023-03-15) I went to the vet yesterday" and the question
@@ -227,6 +264,26 @@ Rules:
     for "what is X" / "where is X" questions, comma-separated lists for
     enumeration questions, one short sentence for "why" / "how" questions.
     Do not wrap your answer in commentary.
+
+Answer:`
+  },
+}
+
+const HYPERMEM_PROMPTS: ProviderPrompts = {
+  answerPrompt: (question, context, questionDate) => {
+    const contextStr = buildRankedContextString(context)
+    return `You are a question-answering system. Based ONLY on the retrieved context below, answer the question.
+
+Question: ${question}
+Question Date: ${questionDate || "Not specified"}
+
+Retrieved Context:
+${contextStr}
+
+Rules:
+1. If the context does not clearly support an answer, respond "I don't know".
+2. Only use information from the retrieved context.
+3. Answer concisely.
 
 Answer:`
   },
@@ -330,15 +387,19 @@ export class BonfiresProvider implements Provider {
   //                              instructions (prefer exact phrase for
   //                              specific-noun questions, assemble freely
   //                              otherwise; refuse only on zero-info)
+  //   - "extractive" → ranked context + shortest-exact-answer rules for
+  //                    answer_hint/list/date/exact-phrase recovery
   //   - "flat"       → legacy JSON.stringify dump (kept for A/B)
   prompts: ProviderPrompts | undefined =
     process.env.BONFIRES_PROMPT === "zep"
       ? BONFIRES_PROMPTS
       : process.env.BONFIRES_PROMPT === "flat"
         ? undefined
-        : process.env.BONFIRES_PROMPT === "ranked"
-          ? RANKED_PROMPTS
-          : STRUCTURED_PROMPTS
+        : process.env.BONFIRES_PROMPT === "extractive"
+          ? EXTRACTIVE_PROMPTS
+          : process.env.BONFIRES_PROMPT === "ranked"
+            ? RANKED_PROMPTS
+            : STRUCTURED_PROMPTS
   private client!: BonfiresClient
   private config!: BonfiresConfig
   private agentId!: string
@@ -381,12 +442,26 @@ export class BonfiresProvider implements Provider {
       bonfireId,
     }
 
+    if (this.config.arm === "hypermem" && !process.env.BONFIRES_PROMPT) {
+      this.prompts = HYPERMEM_PROMPTS
+    }
+
     this.client = new BonfiresClient({ apiUrl: this.config.apiUrl, apiKey: this.config.apiKey })
     await this.client.healthz()
 
     // Ensure Weaviate has the Bonfire_labels / Owl_classes collections.
     // Idempotent — safe to call on every run. Required before update_labels.
     await this.client.setupVectorStore()
+
+    if (this.config.arm === "hypermem" && process.env.MEMORYBENCH_PREINDEXED === "1") {
+      const resolvedBonfireId = resolveBonfireObjectId(this.config.bonfireId)
+      this.config = { ...this.config, bonfireId: resolvedBonfireId }
+      const persisted = loadState(resolvedBonfireId)
+      this.ingestedSessionIds = new Set(persisted.ingestedSessionIds)
+      this.indexingDone = true
+      this.sessionsForKg = persisted.sessionsForKg
+      return
+    }
 
     // Bootstrap the bonfire document in MongoDB before creating the agent,
     // so the agent's bonfireId reference is valid.

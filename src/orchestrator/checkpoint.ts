@@ -76,7 +76,7 @@ export class CheckpointManager {
   private async _performSave(checkpoint: RunCheckpoint): Promise<void> {
     const runPath = this.getRunPath(checkpoint.runId)
     const path = this.getCheckpointPath(checkpoint.runId)
-    const tempPath = path + ".tmp"
+    const tempPath = `${path}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`
 
     if (!existsSync(runPath)) {
       mkdirSync(runPath, { recursive: true })

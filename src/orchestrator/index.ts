@@ -213,6 +213,15 @@ export class Orchestrator {
         logger.info(`In-progress questions: ${inProgressQuestions.join(", ")}`)
       }
 
+      if (concurrency) {
+        checkpoint.concurrency = {
+          ...(checkpoint.concurrency || {}),
+          ...concurrency,
+        }
+        this.checkpointManager.save(checkpoint)
+        logger.info(`Updated checkpoint concurrency: ${JSON.stringify(checkpoint.concurrency)}`)
+      }
+
       this.checkpointManager.updateStatus(checkpoint, "running")
     } else {
       logger.info(
@@ -251,6 +260,21 @@ export class Orchestrator {
           groundTruth: q.groundTruth,
           questionType: q.questionType,
         })
+        if (process.env.MEMORYBENCH_PREINDEXED === "1" && !phases.includes("ingest") && !phases.includes("indexing")) {
+          this.checkpointManager.updatePhase(checkpoint, q.questionId, "ingest", {
+            status: "completed",
+            completedSessions: [],
+            completedAt: new Date().toISOString(),
+            durationMs: 0,
+          })
+          this.checkpointManager.updatePhase(checkpoint, q.questionId, "indexing", {
+            status: "completed",
+            completedIds: [],
+            failedIds: [],
+            completedAt: new Date().toISOString(),
+            durationMs: 0,
+          })
+        }
       }
 
       this.checkpointManager.updateStatus(checkpoint, "running")

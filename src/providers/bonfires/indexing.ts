@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import type { UnifiedSession } from "../../types/unified.js"
+import type { UnifiedMessage, UnifiedSession } from "../../types/unified.js"
 import type { BonfiresClient } from "./client.js"
 import type { StackMessage } from "./types.js"
 import { serializeSession } from "./ingest.js"
@@ -50,6 +50,32 @@ const GENERIC_FALLBACK_TYPES: Array<{ name: string; description: string; parent_
     parent_l1: "Item",
   },
 ]
+
+function stackMessagesForSession(
+  session: UnifiedSession,
+  speakerSalt: string
+): StackMessage[] {
+  const referenceTime = session.metadata?.date as string | undefined
+  const base = referenceTime ? Date.parse(referenceTime) : Date.now()
+  const msgs = session.messages as UnifiedMessage[]
+  return msgs.map((m, i) => {
+    const metadata = {
+      ...(m.metadata ?? {}),
+      preserve_messages: true,
+    }
+    return {
+      id: `${session.sessionId}-m${i}`,
+      text: m.content,
+      userId: speakerToUserId(m.speaker ?? m.role, speakerSalt),
+      chatId: session.sessionId,
+      sessionId: session.sessionId,
+      timestamp: m.timestamp ?? new Date(base + i * 120_000).toISOString(),
+      role: m.role,
+      username: m.speaker,
+      metadata,
+    }
+  })
+}
 
 /**
  * Post-ingest indexing pipeline, ontology-guided-extraction via
@@ -301,24 +327,36 @@ export async function runIndexingPipeline(args: {
   // FIFO into Graphiti. Bypasses every per-session loop below.
   if (STACK_V2 && !skipEpisodes) {
     const allStackMessages: StackMessage[] = []
+    const stackPayloads: Array<{
+      batch_messages: StackMessage[]
+      user_updates: Array<Record<string, unknown>>
+      batch_idx: number
+    }> = []
     for (const session of sessions) {
-      const referenceTime = session.metadata?.date as string | undefined
-      const msgs = session.messages as Array<{ role: string; content: string; speaker?: string }>
-      const base = referenceTime ? Date.parse(referenceTime) : Date.now()
-      for (let i = 0; i < msgs.length; i++) {
-        const m = msgs[i]
-        allStackMessages.push({
-          id: `${session.sessionId}-m${i}`,
-          text: m.content,
-          userId: speakerToUserId(m.speaker ?? m.role, speakerSalt),
-          chatId: session.sessionId,
-          sessionId: session.sessionId,
-          timestamp: new Date(base + i * 120_000).toISOString(),
-          role: m.role,
-          username: m.speaker,
-          metadata: { preserve_messages: true },
-        })
-      }
+      const batchMessages = stackMessagesForSession(session, speakerSalt)
+      allStackMessages.push(...batchMessages)
+      stackPayloads.push({
+        batch_messages: batchMessages,
+        user_updates: [],
+        batch_idx: stackPayloads.length,
+      })
+    }
+    if (process.env.BONFIRES_ARM === "hypermem" && process.env.BONFIRES_HYPERMEM_DIRECT_INDEX !== "0") {
+      console.log(
+        `hypermem direct stack index: draining ${allStackMessages.length} messages across ${stackPayloads.length} sessions`
+      )
+      await client.hypermemStackIndex({
+        bonfireId,
+        profile: process.env.BONFIRES_HYPERMEM_PROFILE ?? "nlp_taxonomy_v1",
+        stackPayloads,
+        initialCandidates: parseInt(process.env.BONFIRES_HYPERMEM_INITIAL_CANDIDATES ?? "100", 10),
+        topicTopK: parseInt(process.env.BONFIRES_HYPERMEM_TOPIC_TOP_K ?? "15", 10),
+        episodeTopK: parseInt(process.env.BONFIRES_HYPERMEM_EPISODE_TOP_K ?? "20", 10),
+        factTopK: parseInt(process.env.BONFIRES_HYPERMEM_FACT_TOP_K ?? "30", 10),
+        outputType: process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE ?? "011",
+        useReranker: process.env.BONFIRES_HYPERMEM_RERANKER !== "0",
+      })
+      return
     }
     console.log(
       `stack V2: pushing ${allStackMessages.length} messages across ${sessions.length} sessions to one stack`

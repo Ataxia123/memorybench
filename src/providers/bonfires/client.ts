@@ -1,5 +1,7 @@
-import { execSync } from "node:child_process"
-import { writeFileSync } from "node:fs"
+import { execFileSync, execSync } from "node:child_process"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { createHash } from "node:crypto"
 import type {
   StackMessage,
@@ -8,6 +10,7 @@ import type {
   KgDelveResult,
   ChunksSearchHit,
   HybridSearchResult,
+  HyperMemSearchResult,
 } from "./types.js"
 
 type FetchLike = typeof fetch
@@ -17,13 +20,17 @@ type FetchLike = typeof fetch
  * Uses SHA-1 of the slug string; takes first 24 hex chars.
  * This is purely deterministic — no randomness, same slug → same id across runs.
  */
-function slugToObjectId(slug: string): string {
+export function slugToObjectId(slug: string): string {
   return createHash("sha1").update(slug).digest("hex").slice(0, 24)
 }
 
 /** Return true if the string is already a valid 24-char hex ObjectId. */
-function isHex24(s: string): boolean {
+export function isHex24(s: string): boolean {
   return /^[0-9a-fA-F]{24}$/.test(s)
+}
+
+export function resolveBonfireObjectId(bonfireId: string): string {
+  return isHex24(bonfireId) ? bonfireId : slugToObjectId(bonfireId)
 }
 
 export interface BonfiresClientOptions {
@@ -78,6 +85,45 @@ export class BonfiresClient {
       throw new Error(`${method} ${path} failed ${r.status}: ${text}`)
     }
     return (await r.json()) as T
+  }
+
+  private reqWithCurl<T>(
+    method: "GET" | "POST" | "PUT" | "DELETE",
+    path: string,
+    body?: unknown,
+    opts: { timeoutMs?: number } = {}
+  ): T {
+    const timeoutSec = Math.max(1, Math.ceil((opts.timeoutMs ?? this.timeoutMs) / 1000))
+    const tempDir = mkdtempSync(join(tmpdir(), "memorybench-bonfires-"))
+    const bodyPath = join(tempDir, "body.json")
+    try {
+      const args = [
+        "--fail-with-body",
+        "--silent",
+        "--show-error",
+        "--max-time",
+        String(timeoutSec),
+        "-X",
+        method,
+        "-H",
+        "Content-Type: application/json",
+      ]
+      if (this.apiKey) {
+        args.push("-H", `Authorization: Bearer ${this.apiKey}`, "-H", `X-API-Key: ${this.apiKey}`)
+      }
+      if (body !== undefined) {
+        writeFileSync(bodyPath, JSON.stringify(body))
+        args.push("--data-binary", `@${bodyPath}`)
+      }
+      args.push(`${this.apiUrl}${path}`)
+      const output = execFileSync("curl", args, {
+        encoding: "utf8",
+        maxBuffer: 512 * 1024 * 1024,
+      })
+      return JSON.parse(output) as T
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true })
+    }
   }
 
   healthz(): Promise<{ status: string }> {
@@ -779,6 +825,67 @@ export class BonfiresClient {
     return this.req<HybridSearchResult>("POST", "/search/hybrid", body)
   }
 
+  hypermemSearch(args: {
+    bonfireId: string
+    query: string
+    profile?: string
+    initialCandidates?: number
+    topicTopK?: number
+    episodeTopK?: number
+    factTopK?: number
+    outputType?: string
+    useReranker?: boolean
+  }): Promise<HyperMemSearchResult> {
+    return this.req<HyperMemSearchResult>("POST", "/search/hypermem", {
+      bonfire_id: args.bonfireId,
+      profile: args.profile ?? "nlp_taxonomy_v1",
+      query: args.query,
+      config: {
+        initial_candidates: args.initialCandidates ?? 100,
+        topic_top_k: args.topicTopK ?? 15,
+        episode_top_k: args.episodeTopK ?? 20,
+        fact_top_k: args.factTopK ?? 30,
+        retrieval_type: "rrf",
+        output_type: args.outputType ?? "011",
+        use_reranker: args.useReranker ?? true,
+      },
+    })
+  }
+
+  hypermemStackIndex(args: {
+    bonfireId: string
+    profile?: string
+    stackPayloads: Array<{
+      batch_messages: StackMessage[]
+      user_updates?: Array<Record<string, unknown>>
+      batch_idx?: number
+    }>
+    initialCandidates?: number
+    topicTopK?: number
+    episodeTopK?: number
+    factTopK?: number
+    outputType?: string
+    useReranker?: boolean
+  }): Promise<{ success: boolean; bonfire_id: string; profile: string; diagnostics: Record<string, unknown> }> {
+    const body = {
+      bonfire_id: args.bonfireId,
+      profile: args.profile ?? "nlp_taxonomy_v1",
+      stack_payloads: args.stackPayloads,
+      config: {
+        initial_candidates: args.initialCandidates ?? 100,
+        topic_top_k: args.topicTopK ?? 15,
+        episode_top_k: args.episodeTopK ?? 20,
+        fact_top_k: args.factTopK ?? 30,
+        retrieval_type: "rrf",
+        output_type: args.outputType ?? "011",
+        use_reranker: args.useReranker ?? true,
+      },
+    }
+    return Promise.resolve(
+      this.reqWithCurl("POST", "/search/hypermem/stack-index", body, { timeoutMs: 7_200_000 })
+    )
+  }
+
   ingestContent(args: {
     bonfireId: string
     content: string
@@ -858,7 +965,7 @@ export class BonfiresClient {
     name: string
     primaryGrammar?: string
   }): Promise<string> {
-    const hexId = isHex24(args.bonfireId) ? args.bonfireId : slugToObjectId(args.bonfireId)
+    const hexId = resolveBonfireObjectId(args.bonfireId)
     const name = args.name
     const grammar = args.primaryGrammar ?? "locomo"
 

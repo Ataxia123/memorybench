@@ -149,6 +149,14 @@ export interface HybridSearchResult {
   }
 }
 
+export interface HyperMemSearchResult {
+  context?: string
+  topics?: Array<{ score?: number | null; data?: Record<string, unknown> }>
+  episodes?: Array<{ score?: number | null; data?: Record<string, unknown> }>
+  facts?: Array<{ score?: number | null; source?: string; data?: Record<string, unknown> }>
+  evidence?: Array<{ score?: number | null; source?: string; data?: Record<string, unknown> }>
+}
+
 export type BonfiresArm =
   | "vector"
   | "graph"
@@ -160,6 +168,7 @@ export type BonfiresArm =
   | "smart_unified"
   | "smart_cascade"
   | "smart_hybrid"
+  | "hypermem"
   | "zep"
 
 export interface BonfiresConfig {
