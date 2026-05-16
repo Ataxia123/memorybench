@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { EXTRACTIVE_PROMPTS } from "./index.js"
+import { EXTRACTIVE_PROMPTS, buildLenientLocomoJudgePrompt } from "./index.js"
 
 describe("Bonfires extractive prompt", () => {
   test("includes ranked list, list, exact phrase, and relative-date rules", () => {
@@ -20,5 +20,19 @@ describe("Bonfires extractive prompt", () => {
     expect(prompt).toContain("resolved relative time")
     expect(prompt).toContain("copy")
     expect(prompt).toContain("exact phrase")
+  })
+
+  test("provides a Zep-style lenient LoCoMo judge prompt for comparable runs", () => {
+    const prompt = buildLenientLocomoJudgePrompt(
+      "What did Caroline research?",
+      "Adoption agencies",
+      "adoption agency, adoption process"
+    ).default
+
+    expect(prompt).toContain("be generous with your grading")
+    expect(prompt).toContain("touches on the same topic")
+    expect(prompt).toContain("same date or time period")
+    expect(prompt).toContain("Adoption agencies")
+    expect(prompt).toContain("adoption agency, adoption process")
   })
 })

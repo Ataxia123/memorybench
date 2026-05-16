@@ -160,6 +160,41 @@ Answer:`
   },
 }
 
+export function buildLenientLocomoJudgePrompt(question: string, groundTruth: string, hypothesis: string) {
+  return {
+    default: `Your task is to label an answer to a question as 'CORRECT' or 'WRONG'. You will be given the following data:
+    (1) a question (posed by one user to another user),
+    (2) a 'gold' (ground truth) answer,
+    (3) a generated answer
+which you will score as CORRECT/WRONG.
+
+The point of the question is to ask about something one user should know about the other user based on their prior conversations.
+The gold answer will usually be a concise and short answer that includes the referenced topic, for example:
+Question: Do you remember what I got the last time I went to Hawaii?
+Gold answer: A shell necklace
+The generated answer might be much longer, but you should be generous with your grading - as long as it touches on the same topic as the gold answer, it should be counted as CORRECT.
+
+For time related questions, the gold answer will be a specific date, month, year, etc. The generated answer might be much longer or use relative time references (like "last Tuesday" or "next month"), but you should be generous with your grading - as long as it refers to the same date or time period as the gold answer, it should be counted as CORRECT. Even if the format differs (e.g., "May 7th" vs "7 May"), consider it CORRECT if it's the same date.
+
+Now it's time for the real question:
+Question: ${question}
+Gold answer: ${groundTruth}
+Generated answer: ${hypothesis}
+
+First, provide a short (one sentence) explanation of your reasoning, then respond with ONLY a JSON object:
+{"score": 1, "label": "correct", "explanation": "..."} if the response contains the correct answer
+{"score": 0, "label": "incorrect", "explanation": "..."} if the response does not contain the correct answer
+
+Do NOT include both labels in your response.`,
+  }
+}
+
+function withConfiguredJudgePrompt(prompts: ProviderPrompts): ProviderPrompts {
+  const judgePrompt = process.env.BONFIRES_JUDGE_PROMPT
+  if (judgePrompt !== "zep" && judgePrompt !== "lenient") return prompts
+  return { ...prompts, judgePrompt: buildLenientLocomoJudgePrompt }
+}
+
 const RANKED_PROMPTS: ProviderPrompts = {
   answerPrompt: (question, context, questionDate) => {
     const contextStr = buildRankedContextString(context)
@@ -392,14 +427,14 @@ export class BonfiresProvider implements Provider {
   //   - "flat"       → legacy JSON.stringify dump (kept for A/B)
   prompts: ProviderPrompts | undefined =
     process.env.BONFIRES_PROMPT === "zep"
-      ? BONFIRES_PROMPTS
+      ? withConfiguredJudgePrompt(BONFIRES_PROMPTS)
       : process.env.BONFIRES_PROMPT === "flat"
         ? undefined
         : process.env.BONFIRES_PROMPT === "extractive"
-          ? EXTRACTIVE_PROMPTS
+          ? withConfiguredJudgePrompt(EXTRACTIVE_PROMPTS)
           : process.env.BONFIRES_PROMPT === "ranked"
-            ? RANKED_PROMPTS
-            : STRUCTURED_PROMPTS
+            ? withConfiguredJudgePrompt(RANKED_PROMPTS)
+            : withConfiguredJudgePrompt(STRUCTURED_PROMPTS)
   private client!: BonfiresClient
   private config!: BonfiresConfig
   private agentId!: string
