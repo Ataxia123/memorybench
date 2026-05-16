@@ -1,5 +1,6 @@
 import type { BonfiresClient } from "./client.js"
 import type { BonfiresConfig, KgDelveResult } from "./types.js"
+import { humanizeDatesInText } from "./dateHumanize.js"
 
 /** Set of entity labels dropped from the rerank pool by smart_hybrid.
  * PreferenceHub is the per-speaker aggregate that unions ALL preferences
@@ -85,13 +86,14 @@ function cleanResolvedRelativeContent(content: string): string {
 function renderHypermemHitText(prefix: string, content: string, temporal: unknown): string {
   const cleanContent = cleanResolvedRelativeContent(content)
   const temporalText = typeof temporal === "string" ? temporal.trim() : ""
-  if (!temporalText) return `${prefix} ${cleanContent}`
+  if (!temporalText) return humanizeDatesInText(`${prefix} ${cleanContent}`)
   if (temporalText.includes("resolved relative time:")) {
-    return cleanContent.includes("[resolved relative time:")
+    const rendered = cleanContent.includes("[resolved relative time:")
       ? `${prefix} ${cleanContent}`
       : `${prefix} ${cleanContent} [${temporalText}]`
+    return humanizeDatesInText(rendered)
   }
-  return `${prefix} ${cleanContent} (event_time: ${temporalText})`
+  return humanizeDatesInText(`${prefix} ${cleanContent} (event_time: ${temporalText})`)
 }
 
 function queryTerms(query: string): Set<string> {

@@ -142,6 +142,13 @@ describe("armSearch", () => {
                 temporal: "2023-05-08; resolved relative time: yesterday = 7 May 2023",
               },
             },
+            {
+              score: 0.07,
+              data: {
+                content: "Caroline attended an LGBTQ support group on May 7, 2023.",
+                temporal: "2023-05-08T14:04:00.000Z",
+              },
+            },
           ],
         })),
       };
@@ -151,13 +158,14 @@ describe("armSearch", () => {
         config: { ...baseCfg, arm: "hypermem" },
       });
       expect(client.hypermemSearch.mock.calls[0][0].outputType).toBe("011");
-      expect(out.map((h) => h.kind)).toEqual(["fact", "fact", "fact", "episode"]);
+      expect(out.map((h) => h.kind)).toEqual(["fact", "fact", "fact", "fact", "episode"]);
       expect(out[0].text).toBe("[FACT] Grammar fact");
-      expect(out[1].text).toBe("[FACT] Statement fact (event_time: 2023-05-07)");
+      expect(out[1].text).toBe("[FACT] Statement fact [occurred 7 May 2023]");
       expect(out[2].text).toBe(
         "[FACT] Caroline went to an LGBTQ support group yesterday. [resolved relative time: yesterday = 7 May 2023; anchor: 8 May 2023]"
       );
-      expect(out[3].text).toBe("[EPISODE] Episode summary (event_time: 2023-05-08)");
+      expect(out[3].text).toBe("[FACT] Caroline attended an LGBTQ support group on May 7, 2023.");
+      expect(out[4].text).toBe("[EPISODE] Episode summary [occurred 8 May 2023]");
     } finally {
       if (prevOutputType === undefined) delete process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE;
       else process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = prevOutputType;

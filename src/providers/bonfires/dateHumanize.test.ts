@@ -105,6 +105,17 @@ describe("humanizeDatesInText", () => {
     )
   })
 
+  it("drops conflicting event_time when the fact body already states a full date", () => {
+    const input =
+      "Caroline attended an LGBTQ support group on May 7, 2023. (event_time: 2023-05-08T14:04:00.000Z)"
+    expect(humanizeDatesInText(input)).toBe("Caroline attended an LGBTQ support group on May 7, 2023.")
+  })
+
+  it("renders human event_time through the same occurred format", () => {
+    const input = "Caroline attended a support group. (event_time: 7 May 2023)"
+    expect(humanizeDatesInText(input)).toBe("Caroline attended a support group. [occurred 7 May 2023]")
+  })
+
   it("rewrites trailing bare (ISO) parenthetical (graphiti edge form)", () => {
     // This is the exact shape the v70 fact at q73 rank #1 uses.
     const input =

@@ -126,8 +126,18 @@ export function humanizeIso(s: string): string {
 const TRAILING_EVENT_TIME_RE =
   /\s*\((?:event_time:\s*)?(\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)?)\)\s*$/
 
+const TRAILING_EVENT_TIME_ANY_RE = /\s*\(event_time:\s*([^)]+)\)\s*$/
+
 const BARE_ISO_RE =
   /\b(\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)?)\b/g
+
+const MONTH_NAME_PATTERN =
+  "January|February|March|April|May|June|July|August|September|October|November|December"
+
+interface ParsedExplicitDate {
+  key: string
+  human: string
+}
 
 /** Rewrite a single rendered text string so embedded ISO dates become
  * human-readable. Idempotent — running on already-humanized text is a
@@ -136,6 +146,22 @@ export function humanizeDatesInText(text: string): string {
   if (typeof text !== "string" || text.length === 0) return text
 
   let out = text
+
+  // Step 0: handle the generic HyperMem renderer shape first. If the fact
+  // body itself states a full date and the appended event_time disagrees,
+  // drop the appended timestamp; the body date is the event being recalled,
+  // while the appended timestamp is often the message/session timestamp.
+  const genericEventMatch = out.match(TRAILING_EVENT_TIME_ANY_RE)
+  if (genericEventMatch) {
+    const body = out.slice(0, genericEventMatch.index!)
+    const bodyDate = parseExplicitDate(body)
+    const eventDate = parseExplicitDate(genericEventMatch[1])
+    if (bodyDate && eventDate && bodyDate.key !== eventDate.key) {
+      out = body.trimEnd()
+    } else if (eventDate) {
+      out = `${body.trimEnd()} [occurred ${eventDate.human}]`
+    }
+  }
 
   // Step 1: handle trailing `(event_time: ...)` or `(YYYY-...)`
   // parentheticals. These are appended by search.ts's `${e.fact} (event_time: ${e.valid_at})`
@@ -170,6 +196,49 @@ export function humanizeDatesInText(text: string): string {
   })
 
   return out
+}
+
+function parseExplicitDate(text: string): ParsedExplicitDate | null {
+  const value = String(text || "")
+  const iso = value.match(
+    /\b(\d{4})-(\d{2})-(\d{2})(?:[T ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)?\b/
+  )
+  if (iso) {
+    const parsed = parseIso(iso[0])
+    if (parsed) return { key: `${iso[1]}-${iso[2]}-${iso[3]}`, human: formatHuman(parsed) }
+  }
+
+  const monthLookup = new Map(MONTH_NAMES.map((name, index) => [name.toLowerCase(), index + 1]))
+  const monthFirst = value.match(
+    new RegExp(`\\b(${MONTH_NAME_PATTERN})\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:,\\s*|\\s+)(\\d{4})\\b`, "i")
+  )
+  if (monthFirst) {
+    const month = monthLookup.get(monthFirst[1].toLowerCase())
+    const day = parseInt(monthFirst[2], 10)
+    const year = parseInt(monthFirst[3], 10)
+    if (month && day >= 1 && day <= 31) {
+      return {
+        key: `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`,
+        human: `${day} ${MONTH_NAMES[month - 1]} ${year}`,
+      }
+    }
+  }
+
+  const dayFirst = value.match(
+    new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(${MONTH_NAME_PATTERN})\\s+(\\d{4})\\b`, "i")
+  )
+  if (dayFirst) {
+    const day = parseInt(dayFirst[1], 10)
+    const month = monthLookup.get(dayFirst[2].toLowerCase())
+    const year = parseInt(dayFirst[3], 10)
+    if (month && day >= 1 && day <= 31) {
+      return {
+        key: `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`,
+        human: `${day} ${MONTH_NAMES[month - 1]} ${year}`,
+      }
+    }
+  }
+  return null
 }
 
 /** Apply the humanizer to every fact/entity/episode hit's `text` field.
