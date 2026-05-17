@@ -165,11 +165,17 @@ export class LoCoMoBenchmark implements Benchmark {
       const unifiedMessages: UnifiedMessage[] = []
       for (const [offset, m] of messages.entries()) {
         const timestamp = baseTime !== null ? new Date(baseTime + offset * 120_000).toISOString() : undefined
+        const sourceMessageId = `${item.sample_id}-${sessionKey}-m${offset}`
         unifiedMessages.push({
           role: m.speaker === speakerA ? ("user" as const) : ("assistant" as const),
           content: m.text,
           speaker: m.speaker,
           timestamp,
+          metadata: {
+            source_message_id: sourceMessageId,
+            source_kind: "message",
+            dia_id: m.dia_id,
+          },
         })
         if (m.blip_caption && process.env.LOCOMO_INCLUDE_IMAGE_CAPTIONS === "1") {
           unifiedMessages.push({
@@ -177,7 +183,15 @@ export class LoCoMoBenchmark implements Benchmark {
             content: m.blip_caption,
             speaker: m.speaker,
             timestamp,
-            metadata: { kind: "image_caption", parent_dia_id: m.dia_id, image_query: m.query, img_url: m.img_url ?? [] },
+            metadata: {
+              kind: "image_caption",
+              source_kind: "image_context",
+              source_message_id: sourceMessageId,
+              parent_source_message_id: sourceMessageId,
+              parent_dia_id: m.dia_id,
+              image_query: m.query,
+              img_url: m.img_url ?? [],
+            },
           })
         }
       }

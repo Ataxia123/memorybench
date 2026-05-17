@@ -51,7 +51,7 @@ const GENERIC_FALLBACK_TYPES: Array<{ name: string; description: string; parent_
   },
 ]
 
-function stackMessagesForSession(
+export function stackMessagesForSession(
   session: UnifiedSession,
   speakerSalt: string
 ): StackMessage[] {
@@ -63,8 +63,10 @@ function stackMessagesForSession(
       ...(m.metadata ?? {}),
       preserve_messages: true,
     }
+    const id = stackMessageId(session.sessionId, i, metadata)
+    metadata.message_id = id
     return {
-      id: `${session.sessionId}-m${i}`,
+      id,
       text: m.content,
       userId: speakerToUserId(m.speaker ?? m.role, speakerSalt),
       chatId: session.sessionId,
@@ -75,6 +77,30 @@ function stackMessagesForSession(
       metadata,
     }
   })
+}
+
+function stackMessageId(
+  sessionId: string,
+  index: number,
+  metadata: Record<string, unknown>
+): string {
+  const explicit = metadata.message_id
+  if (typeof explicit === "string" && explicit.trim()) {
+    return explicit
+  }
+  const sourceMessageId = metadata.source_message_id
+  const sourceKind = metadata.source_kind
+  if (
+    sourceKind === "image_context" &&
+    typeof sourceMessageId === "string" &&
+    sourceMessageId.trim()
+  ) {
+    return `${sourceMessageId}-image`
+  }
+  if (typeof sourceMessageId === "string" && sourceMessageId.trim()) {
+    return sourceMessageId
+  }
+  return `${sessionId}-m${index}`
 }
 
 /**
