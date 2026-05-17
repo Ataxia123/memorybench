@@ -95,6 +95,9 @@ function stackMessageId(
     typeof sourceMessageId === "string" &&
     sourceMessageId.trim()
   ) {
+    if (sourceMessageId.endsWith("-image")) {
+      return sourceMessageId
+    }
     return `${sourceMessageId}-image`
   }
   if (typeof sourceMessageId === "string" && sourceMessageId.trim()) {

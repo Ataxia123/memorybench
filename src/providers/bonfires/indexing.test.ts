@@ -155,6 +155,28 @@ describe("Bonfires stack indexing", () => {
     expect(messages[1].metadata?.source_kind).toBe("image_context")
     expect(messages[2].text).toBe("It was Matt Patterson.")
   })
+
+  test("does not double-suffix standalone image source ids", () => {
+    const session: UnifiedSession = {
+      sessionId: "conv-26-session_8",
+      messages: [
+        {
+          role: "user",
+          speaker: "Melanie",
+          content: "a photo of a cup with a dog face on it",
+          metadata: {
+            source_kind: "image_context",
+            source_message_id: "conv-26-session_8-m3-image",
+          },
+        },
+      ],
+    }
+
+    const messages = stackMessagesForSession(session, "salt")
+
+    expect(messages[0].id).toBe("conv-26-session_8-m3-image")
+    expect(messages[0].metadata?.source_message_id).toBe("conv-26-session_8-m3-image")
+  })
 })
 
 describe("LoCoMo image caption ingestion", () => {
@@ -176,5 +198,25 @@ describe("LoCoMo image caption ingestion", () => {
     )
     expect(captionMessage?.metadata?.source_kind).toBe("image_context")
     expect(captionMessage?.metadata?.source_message_id).toBe("conv-26-session_11-m1")
+  })
+
+  test("does not emit empty dialogue messages when captions are included", async () => {
+    process.env.LOCOMO_INCLUDE_IMAGE_CAPTIONS = "1"
+    const benchmark = new LoCoMoBenchmark()
+    await benchmark.load()
+
+    const sessions = benchmark.getHaystackSessions("conv-26-q110")
+    const session8 = sessions.find((s) => s.sessionId === "conv-26-session_8")
+    expect(session8).toBeTruthy()
+
+    const emptyMessages = session8!.messages.filter((m) => !m.content?.trim())
+    expect(emptyMessages).toHaveLength(0)
+
+    const captionMessage = session8!.messages.find((m) =>
+      m.content.includes("cup with a dog face")
+    )
+    expect(captionMessage?.metadata?.source_kind).toBe("image_context")
+    expect(captionMessage?.metadata?.source_message_id).toBe("conv-26-session_8-m3")
+    expect(captionMessage?.metadata?.parent_source_message_id).toBe("conv-26-session_8-m3")
   })
 })
