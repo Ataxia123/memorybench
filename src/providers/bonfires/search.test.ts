@@ -219,6 +219,51 @@ describe("armSearch", () => {
     }
   });
 
+  it("hypermem arm preserves server-composed context facts missing from arrays", async () => {
+    const prevOutputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE;
+    const prevOrder = process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;
+    const prevReranker = process.env.BONFIRES_HYPERMEM_RERANKER;
+    try {
+      process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = "011";
+      process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = "score";
+      process.env.BONFIRES_HYPERMEM_RERANKER = "0";
+      const client = {
+        hypermemSearch: mock(async () => ({
+          context: [
+            "Episodes memories:",
+            "## Relevant Facts:",
+            "[Fact 1] Direct fact one",
+            "  Time: 2023-07-15T13:53:00.000Z",
+            "",
+            "[Fact 2] Context-only observation fact",
+            "  Time: 2023-07-15T13:57:00.000Z",
+            "## Relevant Graph Facts:",
+            "[Graph Fact 1] Context-only graph fact",
+            "  Time: 2023-07-16T10:00:00.000Z",
+          ].join("\n"),
+          facts: [{ score: 0.3, data: { content: "Direct fact one", temporal: "2023-07-15T13:53:00.000Z" } }],
+        })),
+      };
+      const out = await armSearch({
+        client: client as unknown as Parameters<typeof armSearch>[0]["client"],
+        query: "observation",
+        config: { ...baseCfg, arm: "hypermem" },
+      });
+      expect(out.map((h) => h.text)).toEqual([
+        "[FACT] Direct fact one [occurred 15 July 2023]",
+        "[FACT] Context-only observation fact [occurred 15 July 2023]",
+        "[EVIDENCE] Context-only graph fact [occurred 16 July 2023]",
+      ]);
+    } finally {
+      if (prevOutputType === undefined) delete process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE;
+      else process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = prevOutputType;
+      if (prevOrder === undefined) delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;
+      else process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = prevOrder;
+      if (prevReranker === undefined) delete process.env.BONFIRES_HYPERMEM_RERANKER;
+      else process.env.BONFIRES_HYPERMEM_RERANKER = prevReranker;
+    }
+  });
+
   it("hypermem arm renders entity linkage leads as candidate items from the fact structure", async () => {
     const prevOutputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE;
     const prevOrder = process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;

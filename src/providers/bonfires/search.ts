@@ -96,6 +96,76 @@ function renderHypermemHitText(prefix: string, content: string, temporal: unknow
   return humanizeDatesInText(`${prefix} ${cleanContent} (event_time: ${temporalText})`)
 }
 
+function normalizeHypermemVisibleText(text: string): string {
+  return text
+    .replace(/^\[(?:FACT|EVIDENCE|EPISODE|TOPIC|Fact\s+\d+|Graph Fact\s+\d+)\]\s*/i, "")
+    .replace(/\s+\(event_time:\s*[^)]+\)\s*$/i, "")
+    .replace(/\s+\[occurred [^\]]+\]\s*$/i, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase()
+}
+
+function supplementalHypermemContextHits(context: unknown, existingHits: SearchHit[]): SearchHit[] {
+  if (typeof context !== "string" || !context.trim()) return []
+  const seen = new Set(existingHits.map((hit) => normalizeHypermemVisibleText(hit.text)).filter(Boolean))
+  const out: SearchHit[] = []
+  let current:
+    | {
+        label: "Fact" | "Graph Fact"
+        contentLines: string[]
+        temporal: string
+      }
+    | null = null
+
+  const flush = () => {
+    if (!current) return
+    const item = current
+    const content = item.contentLines.join(" ").replace(/\s+/g, " ").trim()
+    current = null
+    if (!content) return
+    const prefix = item.label === "Graph Fact" ? "[EVIDENCE]" : "[FACT]"
+    const sourceType = item.label === "Graph Fact" ? "graph_evidence" : "context_fact"
+    const text = renderHypermemHitText(prefix, content, item.temporal)
+    const key = normalizeHypermemVisibleText(text)
+    if (!key || seen.has(key)) return
+    seen.add(key)
+    out.push({
+      text,
+      score: null,
+      kind: "fact",
+      metadata: {
+        source: "hypermem_context",
+        hypermem: { source_type: sourceType },
+      },
+    })
+  }
+
+  for (const rawLine of context.split(/\r?\n/)) {
+    const line = rawLine.trim()
+    const start = line.match(/^\[(Fact|Graph Fact)\s+\d+\]\s*(.*)$/)
+    if (start) {
+      flush()
+      current = {
+        label: start[1] as "Fact" | "Graph Fact",
+        contentLines: start[2] ? [start[2]] : [],
+        temporal: "",
+      }
+      continue
+    }
+    if (!current || !line || line.startsWith("## ")) continue
+    const temporal = line.match(/^Time:\s*(.+)$/i)
+    if (temporal) {
+      current.temporal = temporal[1].trim()
+      continue
+    }
+    if (/^(Episode|Location):\s+/i.test(line)) continue
+    current.contentLines.push(line)
+  }
+  flush()
+  return out.slice(0, 12)
+}
+
 function queryTerms(query: string): Set<string> {
   const terms = new Set<string>()
   for (const match of query.matchAll(/[A-Za-z][A-Za-z0-9']+/g)) {
@@ -486,7 +556,8 @@ export async function armSearch(args: {
             },
           }))
           .filter((hit) => matchesLinkedEvidenceActor(answerVisibleContent(hit), query)), query)
-        return orderedHypermemHits(outputType, { topics, episodes, facts, evidence })
+        const ordered = orderedHypermemHits(outputType, { topics, episodes, facts, evidence })
+        return [...ordered, ...supplementalHypermemContextHits(r.context, ordered)]
       }
       case "smart_chunks_only": {
         // Engram replication — pure hybrid retrieval over the trimtab chunks
