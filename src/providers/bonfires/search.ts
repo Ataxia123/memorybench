@@ -166,6 +166,90 @@ function supplementalHypermemContextHits(context: unknown, existingHits: SearchH
   return out.slice(0, 12)
 }
 
+function supplementalHypermemEpisodeDetailHits(
+  query: string,
+  episodes: Array<{ score?: number | null; data?: Record<string, unknown> }>,
+  existingHits: SearchHit[]
+): SearchHit[] {
+  const queryTermSet = queryTerms(query)
+  const nameTerms = queryNameTerms(query)
+  const structuralTerms = new Set(
+    [...queryTermSet].filter((term) => !nameTerms.has(term) && !QUERY_FUNCTION_TERMS.has(term))
+  )
+  if (structuralTerms.size === 0) return []
+
+  const seen = new Set(existingHits.map((hit) => normalizeHypermemVisibleText(hit.text)).filter(Boolean))
+  const wantsNamedAnswer = /\bwho\b/i.test(query)
+  const out: SearchHit[] = []
+
+  for (const episode of episodes) {
+    const data = episode.data ?? {}
+    const description = String(data.episode_description ?? "").trim()
+    if (!description) continue
+    const lines = description
+      .split(/\r?\n+/)
+      .map((line) => line.replace(/\s+/g, " ").trim())
+      .filter(Boolean)
+    const episodeOverlap = Math.max(
+      0,
+      ...lines.map((line) => clauseOverlapScore(line, structuralTerms, new Set()))
+    )
+    if (episodeOverlap < 2) continue
+
+    const candidates = lines
+      .map((line, index) => {
+        const overlap = clauseOverlapScore(line, structuralTerms, new Set())
+        const namedAnswer = wantsNamedAnswer && /\b[A-Z][A-Za-z'-]+\s+[A-Z][A-Za-z'-]+\b/.test(line)
+        const quotedAnswer = /\b(?:what|which)\b/i.test(query) && /["'][^"']{2,80}["']/.test(line)
+        const keep = overlap > 0 || namedAnswer || quotedAnswer
+        const score = overlap + (namedAnswer ? 2 : 0) + (quotedAnswer ? 2 : 0)
+        return { line, index, keep, score }
+      })
+      .filter((item) => item.keep)
+      .sort((a, b) => b.score - a.score || a.index - b.index)
+      .slice(0, 3)
+
+    for (const candidate of candidates) {
+      const text = renderHypermemHitText("[FACT]", candidate.line, data.timestamp)
+      const key = normalizeHypermemVisibleText(text)
+      if (!key || seen.has(key)) continue
+      seen.add(key)
+      out.push({
+        text,
+        score: episode.score ?? null,
+        kind: "fact",
+        metadata: {
+          source: "hypermem_episode_detail",
+          hypermem: { source_type: "episode_detail" },
+        },
+      })
+      if (out.length >= 8) return out
+    }
+  }
+
+  return out
+}
+
+const QUERY_FUNCTION_TERMS = new Set([
+  "who",
+  "what",
+  "when",
+  "where",
+  "why",
+  "how",
+  "which",
+  "would",
+  "could",
+  "should",
+  "did",
+  "does",
+  "do",
+  "is",
+  "are",
+  "was",
+  "were",
+])
+
 function queryTerms(query: string): Set<string> {
   const terms = new Set<string>()
   for (const match of query.matchAll(/[A-Za-z][A-Za-z0-9']+/g)) {
@@ -557,7 +641,12 @@ export async function armSearch(args: {
           }))
           .filter((hit) => matchesLinkedEvidenceActor(answerVisibleContent(hit), query)), query)
         const ordered = orderedHypermemHits(outputType, { topics, episodes, facts, evidence })
-        return [...ordered, ...supplementalHypermemContextHits(r.context, ordered)]
+        const contextSupplement = supplementalHypermemContextHits(r.context, ordered)
+        return [
+          ...ordered,
+          ...contextSupplement,
+          ...supplementalHypermemEpisodeDetailHits(query, r.episodes ?? [], [...ordered, ...contextSupplement]),
+        ]
       }
       case "smart_chunks_only": {
         // Engram replication — pure hybrid retrieval over the trimtab chunks

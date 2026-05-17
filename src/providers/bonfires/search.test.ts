@@ -264,6 +264,48 @@ describe("armSearch", () => {
     }
   });
 
+  it("hypermem arm surfaces structural episode detail lines from retrieved episodes", async () => {
+    const prevOutputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE;
+    const prevOrder = process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;
+    const prevReranker = process.env.BONFIRES_HYPERMEM_RERANKER;
+    try {
+      process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = "011";
+      process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = "score";
+      process.env.BONFIRES_HYPERMEM_RERANKER = "0";
+      const client = {
+        hypermemSearch: mock(async () => ({
+          episodes: [
+            {
+              score: 0.7,
+              data: {
+                summary: "Melanie and her family celebrated her daughter's birthday with a concert.",
+                timestamp: "2023-08-14T14:56:00.000Z",
+                episode_description: [
+                  "Melanie and her family celebrated her daughter's birthday with a concert last night.",
+                  "Melanie said that Matt Patterson is very talented.",
+                  "Melanie said that Matt Patterson's voice and songs were amazing.",
+                ].join("\n"),
+              },
+            },
+          ],
+        })),
+      };
+      const out = await armSearch({
+        client: client as unknown as Parameters<typeof armSearch>[0]["client"],
+        query: "Who performed at the concert at Melanie's daughter's birthday?",
+        config: { ...baseCfg, arm: "hypermem" },
+      });
+      expect(out.some((h) => h.text.includes("Matt Patterson is very talented"))).toBe(true);
+    } finally {
+      if (prevOutputType === undefined) delete process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE;
+      else process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = prevOutputType;
+      if (prevOrder === undefined) delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;
+      else process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = prevOrder;
+      if (prevReranker === undefined) delete process.env.BONFIRES_HYPERMEM_RERANKER;
+      else process.env.BONFIRES_HYPERMEM_RERANKER = prevReranker;
+    }
+  });
+
   it("hypermem arm renders entity linkage leads as candidate items from the fact structure", async () => {
     const prevOutputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE;
     const prevOrder = process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;
