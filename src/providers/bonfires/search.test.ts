@@ -347,6 +347,46 @@ describe("armSearch", () => {
     }
   });
 
+  it("hypermem arm keeps linked evidence when a short query name prefixes a full actor name", async () => {
+    const prevOutputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE;
+    const prevOrder = process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;
+    const prevReranker = process.env.BONFIRES_HYPERMEM_RERANKER;
+    try {
+      process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = "011";
+      delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;
+      process.env.BONFIRES_HYPERMEM_RERANKER = "0";
+      const client = {
+        hypermemSearch: mock(async () => ({
+          facts: [
+            {
+              score: 0.3,
+              data: {
+                source_type: "entity_linkage",
+                content:
+                  "Within Symbolic Objects, clay sculptures, Melanie, and Caroline are semantically linked: Melanie shared a photo of a cup with a dog face on it.",
+              },
+            },
+          ],
+        })),
+      };
+      const out = await armSearch({
+        client: client as unknown as Parameters<typeof armSearch>[0]["client"],
+        query: "What kind of pot did Mel and her kids make with clay?",
+        config: { ...baseCfg, arm: "hypermem" },
+      });
+      expect(out.map((hit) => hit.text)).toEqual([
+        "[FACT] Within Symbolic Objects, candidate linked items: clay sculptures. Evidence: Melanie shared a photo of a cup with a dog face on it.",
+      ]);
+    } finally {
+      if (prevOutputType === undefined) delete process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE;
+      else process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = prevOutputType;
+      if (prevOrder === undefined) delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;
+      else process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = prevOrder;
+      if (prevReranker === undefined) delete process.env.BONFIRES_HYPERMEM_RERANKER;
+      else process.env.BONFIRES_HYPERMEM_RERANKER = prevReranker;
+    }
+  });
+
   it("hypermem arm drops rendered candidate evidence when the evidence body has a different actor", async () => {
     const prevOutputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE;
     const prevOrder = process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;

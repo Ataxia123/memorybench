@@ -201,15 +201,28 @@ function matchesLinkedEvidenceActor(content: string, query: string): boolean {
   if (!content.startsWith("Within ") || (markerIndex < 0 && evidenceMarkerIndex < 0)) return true
 
   const actor = names[0]
-  const actorPattern = new RegExp(`\\b${actor.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i")
   const body =
     markerIndex >= 0
       ? content.slice(markerIndex + marker.length)
       : content.slice(evidenceMarkerIndex + evidenceMarker.length)
-  if (actorPattern.test(body)) return true
+  if (textHasCompatibleName(body, actor)) return true
 
   const namedInBody = body.match(/\b[A-Z][A-Za-z0-9']+\b/g) ?? []
-  return !namedInBody.some((name) => simpleStem(name) !== simpleStem(actor))
+  return !namedInBody.some((name) => !compatibleNameTerms(simpleStem(name), actor))
+}
+
+function textHasCompatibleName(text: string, actor: string): boolean {
+  for (const match of text.matchAll(/\b[A-Z][A-Za-z0-9']+\b/g)) {
+    if (compatibleNameTerms(simpleStem(match[0]), actor)) return true
+  }
+  return false
+}
+
+function compatibleNameTerms(left: string, right: string): boolean {
+  if (!left || !right) return false
+  if (left === right) return true
+  const minLength = Math.min(left.length, right.length)
+  return minLength >= 3 && (left.startsWith(right) || right.startsWith(left))
 }
 
 function simpleStem(term: string): string {
