@@ -36,7 +36,7 @@ function orderedHypermemHits(
   }
 ): SearchHit[] {
   const bits = /^[01]{3}$/.test(outputType) ? outputType : "011"
-  const order = process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER ?? "facts_first"
+  const order = process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER ?? "score"
   const includeEvidence = process.env.BONFIRES_HYPERMEM_INCLUDE_EVIDENCE !== "0"
   const out: SearchHit[] = []
   if (order === "score") {

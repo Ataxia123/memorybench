@@ -106,7 +106,7 @@ describe("armSearch", () => {
     errSpy.mockRestore();
   });
 
-  it("hypermem arm defaults to fact-first context and does not expose fact bookkeeping timestamps", async () => {
+  it("hypermem arm defaults to score-ranked context and does not expose fact bookkeeping timestamps", async () => {
     const prevOutputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE;
     const prevOrder = process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;
     const prevReranker = process.env.BONFIRES_HYPERMEM_RERANKER;
@@ -158,14 +158,14 @@ describe("armSearch", () => {
         config: { ...baseCfg, arm: "hypermem" },
       });
       expect(client.hypermemSearch.mock.calls[0][0].outputType).toBe("011");
-      expect(out.map((h) => h.kind)).toEqual(["fact", "fact", "fact", "fact", "episode"]);
-      expect(out[0].text).toBe("[FACT] Grammar fact");
-      expect(out[1].text).toBe("[FACT] Statement fact [occurred 7 May 2023]");
-      expect(out[2].text).toBe(
+      expect(out.map((h) => h.kind)).toEqual(["episode", "fact", "fact", "fact", "fact"]);
+      expect(out[0].text).toBe("[EPISODE] Episode summary [occurred 8 May 2023]");
+      expect(out[1].text).toBe("[FACT] Grammar fact");
+      expect(out[2].text).toBe("[FACT] Statement fact [occurred 7 May 2023]");
+      expect(out[3].text).toBe(
         "[FACT] Caroline went to an LGBTQ support group yesterday. [resolved relative time: yesterday = 7 May 2023; anchor: 8 May 2023]"
       );
-      expect(out[3].text).toBe("[FACT] Caroline attended an LGBTQ support group on May 7, 2023.");
-      expect(out[4].text).toBe("[EPISODE] Episode summary [occurred 8 May 2023]");
+      expect(out[4].text).toBe("[FACT] Caroline attended an LGBTQ support group on May 7, 2023.");
     } finally {
       if (prevOutputType === undefined) delete process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE;
       else process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = prevOutputType;
@@ -562,7 +562,7 @@ describe("armSearch", () => {
     }
   });
 
-  it("hypermem arm promotes rendered action targets above generic action facts", async () => {
+  it("hypermem arm preserves score order for rendered action targets and generic action facts", async () => {
     const prevOutputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE;
     const prevOrder = process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;
     const prevReranker = process.env.BONFIRES_HYPERMEM_RERANKER;
@@ -597,8 +597,8 @@ describe("armSearch", () => {
         config: { ...baseCfg, arm: "hypermem" },
       });
       expect(out.map((hit) => hit.text)).toEqual([
-        "[FACT] Action target for research: adoption agency. Evidence: Caroline advises to do research and find an adoption agency or lawyer for help with the adoption process.",
         "[FACT] Caroline plans to go do some research.",
+        "[FACT] Action target for research: adoption agency. Evidence: Caroline advises to do research and find an adoption agency or lawyer for help with the adoption process.",
       ]);
     } finally {
       if (prevOutputType === undefined) delete process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE;
