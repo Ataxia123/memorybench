@@ -180,7 +180,10 @@ export class LoCoMoBenchmark implements Benchmark {
             },
           })
         }
-        if (m.blip_caption && process.env.LOCOMO_INCLUDE_IMAGE_CAPTIONS === "1") {
+        const includeImageCaptions = !["0", "false", "no", "off"].includes(
+          String(process.env.LOCOMO_INCLUDE_IMAGE_CAPTIONS ?? "1").trim().toLowerCase()
+        )
+        if (m.blip_caption && includeImageCaptions) {
           const captionSourceMessageId = hasText ? sourceMessageId : `${sourceMessageId}-image`
           unifiedMessages.push({
             role: m.speaker === speakerA ? ("user" as const) : ("assistant" as const),

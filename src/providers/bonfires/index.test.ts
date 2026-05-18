@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { EXTRACTIVE_PROMPTS, buildLenientLocomoJudgePrompt } from "./index.js"
+import { BonfiresProvider, EXTRACTIVE_PROMPTS, buildLenientLocomoJudgePrompt } from "./index.js"
 
 describe("Bonfires extractive prompt", () => {
   test("includes ranked list, list, exact phrase, and relative-date rules", () => {
@@ -34,5 +34,27 @@ describe("Bonfires extractive prompt", () => {
     expect(prompt).toContain("same date or time period")
     expect(prompt).toContain("Adoption agencies")
     expect(prompt).toContain("adoption agency, adoption process")
+  })
+
+  test("uses the Zep-style judge prompt by default", () => {
+    const previous = process.env.BONFIRES_JUDGE_PROMPT
+    delete process.env.BONFIRES_JUDGE_PROMPT
+    try {
+      const provider = new BonfiresProvider()
+      const prompt = provider.prompts?.judgePrompt?.(
+        "What did Caroline research?",
+        "Adoption agencies",
+        "adoption agency, adoption process"
+      ).default
+
+      expect(prompt).toContain("be generous with your grading")
+      expect(prompt).toContain("touches on the same topic")
+    } finally {
+      if (previous === undefined) {
+        delete process.env.BONFIRES_JUDGE_PROMPT
+      } else {
+        process.env.BONFIRES_JUDGE_PROMPT = previous
+      }
+    }
   })
 })

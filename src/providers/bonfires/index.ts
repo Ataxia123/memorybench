@@ -190,7 +190,7 @@ Do NOT include both labels in your response.`,
 }
 
 function withConfiguredJudgePrompt(prompts: ProviderPrompts): ProviderPrompts {
-  const judgePrompt = process.env.BONFIRES_JUDGE_PROMPT
+  const judgePrompt = process.env.BONFIRES_JUDGE_PROMPT ?? "zep"
   if (judgePrompt !== "zep" && judgePrompt !== "lenient") return prompts
   return { ...prompts, judgePrompt: buildLenientLocomoJudgePrompt }
 }
@@ -484,9 +484,14 @@ export class BonfiresProvider implements Provider {
     this.client = new BonfiresClient({ apiUrl: this.config.apiUrl, apiKey: this.config.apiKey })
     await this.client.healthz()
 
-    // Ensure Weaviate has the Bonfire_labels / Owl_classes collections.
-    // Idempotent — safe to call on every run. Required before update_labels.
-    await this.client.setupVectorStore()
+    // Legacy vector-store setup is only needed by the non-HyperMem Bonfires
+    // arms that still route through Weaviate-backed label/chunk search.
+    // HyperMem owns its retrieval surface in Delve/Mongo/Neo4j; touching
+    // Weaviate here adds startup work and keeps the deprecated Owl_classes
+    // path alive during MemoryBench runs.
+    if (this.config.arm !== "hypermem") {
+      await this.client.setupVectorStore()
+    }
 
     if (this.config.arm === "hypermem" && process.env.MEMORYBENCH_PREINDEXED === "1") {
       const resolvedBonfireId = resolveBonfireObjectId(this.config.bonfireId)

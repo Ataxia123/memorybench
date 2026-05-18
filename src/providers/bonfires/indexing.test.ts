@@ -180,6 +180,55 @@ describe("Bonfires stack indexing", () => {
 })
 
 describe("LoCoMo image caption ingestion", () => {
+  test("includes image captions by default", async () => {
+    const previous = process.env.LOCOMO_INCLUDE_IMAGE_CAPTIONS
+    delete process.env.LOCOMO_INCLUDE_IMAGE_CAPTIONS
+    try {
+      const benchmark = new LoCoMoBenchmark()
+      await benchmark.load()
+
+      const sessions = benchmark.getHaystackSessions("conv-26-q121")
+      const session11 = sessions.find((s) => s.sessionId === "conv-26-session_11")
+      expect(session11).toBeTruthy()
+
+      const captionMessage = session11!.messages.find((m) =>
+        m.content.includes("poster for a concert")
+      )
+      expect(captionMessage?.metadata?.source_kind).toBe("image_context")
+      expect(captionMessage?.metadata?.source_message_id).toBe("conv-26-session_11-m1")
+    } finally {
+      if (previous === undefined) {
+        delete process.env.LOCOMO_INCLUDE_IMAGE_CAPTIONS
+      } else {
+        process.env.LOCOMO_INCLUDE_IMAGE_CAPTIONS = previous
+      }
+    }
+  })
+
+  test("can disable image captions explicitly", async () => {
+    const previous = process.env.LOCOMO_INCLUDE_IMAGE_CAPTIONS
+    process.env.LOCOMO_INCLUDE_IMAGE_CAPTIONS = "0"
+    try {
+      const benchmark = new LoCoMoBenchmark()
+      await benchmark.load()
+
+      const sessions = benchmark.getHaystackSessions("conv-26-q121")
+      const session11 = sessions.find((s) => s.sessionId === "conv-26-session_11")
+      expect(session11).toBeTruthy()
+
+      const captionMessage = session11!.messages.find((m) =>
+        m.content.includes("poster for a concert")
+      )
+      expect(captionMessage).toBeUndefined()
+    } finally {
+      if (previous === undefined) {
+        delete process.env.LOCOMO_INCLUDE_IMAGE_CAPTIONS
+      } else {
+        process.env.LOCOMO_INCLUDE_IMAGE_CAPTIONS = previous
+      }
+    }
+  })
+
   test("keeps original dialogue source ids stable when captions are included", async () => {
     process.env.LOCOMO_INCLUDE_IMAGE_CAPTIONS = "1"
     const benchmark = new LoCoMoBenchmark()
