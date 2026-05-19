@@ -4,6 +4,8 @@ export interface Config {
   mem0ApiKey: string
   zepApiKey: string
   openaiApiKey: string
+  openrouterApiKey: string
+  openaiBaseUrl: string
   anthropicApiKey: string
   googleApiKey: string
   bonfiresApiUrl: string
@@ -28,6 +30,8 @@ export const config: Config = {
   mem0ApiKey: process.env.MEM0_API_KEY || "",
   zepApiKey: process.env.ZEP_API_KEY || "",
   openaiApiKey: process.env.OPENAI_API_KEY || "",
+  openrouterApiKey: process.env.OPENROUTER_API_KEY || "",
+  openaiBaseUrl: process.env.OPENAI_BASE_URL || "",
   anthropicApiKey: process.env.ANTHROPIC_API_KEY || "",
   googleApiKey: process.env.GOOGLE_API_KEY || "",
   bonfiresApiUrl: process.env.BONFIRES_API_URL || "http://localhost:8000",
@@ -81,4 +85,31 @@ export function getJudgeConfig(judge: string): { apiKey: string; model?: string 
     default:
       throw new Error(`Unknown judge: ${judge}`)
   }
+}
+
+export function getOpenAICompatConfig(): { apiKey: string; baseURL?: string } {
+  const baseURL =
+    config.openaiBaseUrl ||
+    (config.openrouterApiKey && !config.openaiApiKey ? "https://openrouter.ai/api/v1" : undefined)
+  return {
+    apiKey: config.openaiApiKey || config.openrouterApiKey,
+    baseURL,
+  }
+}
+
+export function resolveOpenAICompatModelId(modelId: string): string {
+  const baseURL =
+    config.openaiBaseUrl ||
+    (config.openrouterApiKey && !config.openaiApiKey ? "https://openrouter.ai/api/v1" : "")
+  const isOpenRouter = baseURL.includes("openrouter.ai")
+  if (!isOpenRouter || modelId.includes("/")) return modelId
+  if (modelId.startsWith("gpt-") || modelId.startsWith("o")) return `openai/${modelId}`
+  return modelId
+}
+
+export function supportsOpenAICompatTemperature(): boolean {
+  const baseURL =
+    config.openaiBaseUrl ||
+    (config.openrouterApiKey && !config.openaiApiKey ? "https://openrouter.ai/api/v1" : "")
+  return !baseURL.includes("openrouter.ai")
 }

@@ -5,6 +5,11 @@ import type { ProviderPrompts } from "../types/prompts"
 import { buildJudgePrompt, parseJudgeResponse, getJudgePrompt } from "./base"
 import { logger } from "../utils/logger"
 import { getModelConfig, ModelConfig, DEFAULT_JUDGE_MODELS } from "../utils/models"
+import {
+  getOpenAICompatConfig,
+  resolveOpenAICompatModelId,
+  supportsOpenAICompatTemperature,
+} from "../utils/config"
 
 export class OpenAIJudge implements Judge {
   name = "openai"
@@ -12,10 +17,7 @@ export class OpenAIJudge implements Judge {
   private client: ReturnType<typeof createOpenAI> | null = null
 
   async initialize(config: JudgeConfig): Promise<void> {
-    this.client = createOpenAI({
-      apiKey: config.apiKey,
-      baseURL: process.env.OPENAI_BASE_URL,
-    })
+    this.client = createOpenAI(getOpenAICompatConfig())
     const modelAlias = config.model || DEFAULT_JUDGE_MODELS.openai
     this.modelConfig = getModelConfig(modelAlias)
     logger.info(
@@ -29,11 +31,11 @@ export class OpenAIJudge implements Judge {
     const prompt = buildJudgePrompt(input)
 
     const params: Record<string, unknown> = {
-      model: this.client(this.modelConfig.id),
+      model: this.client(resolveOpenAICompatModelId(this.modelConfig.id)),
       prompt,
     }
 
-    if (this.modelConfig.supportsTemperature) {
+    if (this.modelConfig.supportsTemperature && supportsOpenAICompatTemperature()) {
       params.temperature = this.modelConfig.defaultTemperature
     }
 
@@ -50,7 +52,7 @@ export class OpenAIJudge implements Judge {
 
   getModel() {
     if (!this.client || !this.modelConfig) throw new Error("Judge not initialized")
-    return this.client(this.modelConfig.id)
+    return this.client(resolveOpenAICompatModelId(this.modelConfig.id))
   }
 }
 

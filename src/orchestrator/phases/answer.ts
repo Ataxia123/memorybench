@@ -7,7 +7,12 @@ import type { Benchmark } from "../../types/benchmark"
 import type { RunCheckpoint } from "../../types/checkpoint"
 import type { Provider } from "../../types/provider"
 import { CheckpointManager } from "../checkpoint"
-import { config } from "../../utils/config"
+import {
+  config,
+  getOpenAICompatConfig,
+  resolveOpenAICompatModelId,
+  supportsOpenAICompatTemperature,
+} from "../../utils/config"
 import { logger } from "../../utils/logger"
 import { getModelConfig, ModelConfig, DEFAULT_ANSWERING_MODEL } from "../../utils/models"
 import { buildDefaultAnswerPrompt } from "../../prompts/defaults"
@@ -30,10 +35,7 @@ function getAnsweringModel(modelAlias: string): {
   switch (modelConfig.provider) {
     case "openai":
       return {
-        client: createOpenAI({
-          apiKey: config.openaiApiKey,
-          baseURL: process.env.OPENAI_BASE_URL,
-        }),
+        client: createOpenAI(getOpenAICompatConfig()),
         modelConfig,
       }
     case "anthropic":
@@ -133,12 +135,12 @@ export async function runAnswerPhase(
         const contextTokens = Math.max(0, promptTokens - basePromptTokens)
 
         const params: Record<string, unknown> = {
-          model: client(modelConfig.id),
+          model: client(resolveOpenAICompatModelId(modelConfig.id)),
           prompt,
           maxTokens: modelConfig.defaultMaxTokens,
         }
 
-        if (modelConfig.supportsTemperature) {
+        if (modelConfig.supportsTemperature && supportsOpenAICompatTemperature()) {
           params.temperature = modelConfig.defaultTemperature
         }
 

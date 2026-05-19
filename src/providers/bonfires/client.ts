@@ -838,15 +838,15 @@ export class BonfiresClient {
   }): Promise<HyperMemSearchResult> {
     return this.req<HyperMemSearchResult>("POST", "/search/hypermem", {
       bonfire_id: args.bonfireId,
-      profile: args.profile ?? "nlp_taxonomy_v1",
+      profile: args.profile ?? "nlp_single_graph_v1",
       query: args.query,
       config: {
         initial_candidates: args.initialCandidates ?? 100,
-        topic_top_k: args.topicTopK ?? 15,
-        episode_top_k: args.episodeTopK ?? 20,
-        fact_top_k: args.factTopK ?? 30,
+        topic_top_k: args.topicTopK ?? 4,
+        episode_top_k: args.episodeTopK ?? 6,
+        fact_top_k: args.factTopK ?? 10,
         retrieval_type: "rrf",
-        output_type: args.outputType ?? "011",
+        output_type: args.outputType ?? "111",
         use_reranker: args.useReranker ?? true,
       },
     })
@@ -869,15 +869,15 @@ export class BonfiresClient {
   }): Promise<{ success: boolean; bonfire_id: string; profile: string; diagnostics: Record<string, unknown> }> {
     const body = {
       bonfire_id: args.bonfireId,
-      profile: args.profile ?? "nlp_taxonomy_v1",
+      profile: args.profile ?? "nlp_single_graph_v1",
       stack_payloads: args.stackPayloads,
       config: {
         initial_candidates: args.initialCandidates ?? 100,
-        topic_top_k: args.topicTopK ?? 15,
-        episode_top_k: args.episodeTopK ?? 20,
-        fact_top_k: args.factTopK ?? 30,
+        topic_top_k: args.topicTopK ?? 4,
+        episode_top_k: args.episodeTopK ?? 6,
+        fact_top_k: args.factTopK ?? 10,
         retrieval_type: "rrf",
-        output_type: args.outputType ?? "011",
+        output_type: args.outputType ?? "111",
         use_reranker: args.useReranker ?? true,
       },
     }

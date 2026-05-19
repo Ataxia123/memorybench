@@ -44,7 +44,9 @@ function orderedHypermemHits(
     if (bits[1] === "1") out.push(...hits.episodes)
     if (bits[2] === "1") out.push(...hits.facts)
     if (includeEvidence) out.push(...hits.evidence)
-    return out.sort((a, b) => (b.score ?? Number.NEGATIVE_INFINITY) - (a.score ?? Number.NEGATIVE_INFINITY))
+    return out.sort(
+      (a, b) => (b.score ?? Number.NEGATIVE_INFINITY) - (a.score ?? Number.NEGATIVE_INFINITY)
+    )
   }
   if (order === "facts_first") {
     if (bits[2] === "1") out.push(...hits.facts)
@@ -86,6 +88,8 @@ function cleanResolvedRelativeContent(content: string): string {
 function renderHypermemHitText(prefix: string, content: string, temporal: unknown): string {
   const cleanContent = cleanResolvedRelativeContent(content)
   const temporalText = typeof temporal === "string" ? temporal.trim() : ""
+  if (cleanContent.includes("[resolved relative time:"))
+    return humanizeDatesInText(`${prefix} ${cleanContent}`)
   if (!temporalText) return humanizeDatesInText(`${prefix} ${cleanContent}`)
   if (temporalText.includes("resolved relative time:")) {
     const rendered = cleanContent.includes("[resolved relative time:")
@@ -94,383 +98,6 @@ function renderHypermemHitText(prefix: string, content: string, temporal: unknow
     return humanizeDatesInText(rendered)
   }
   return humanizeDatesInText(`${prefix} ${cleanContent} (event_time: ${temporalText})`)
-}
-
-function normalizeHypermemVisibleText(text: string): string {
-  return text
-    .replace(/^\[(?:FACT|EVIDENCE|EPISODE|TOPIC|Fact\s+\d+|Graph Fact\s+\d+)\]\s*/i, "")
-    .replace(/\s+\(event_time:\s*[^)]+\)\s*$/i, "")
-    .replace(/\s+\[occurred [^\]]+\]\s*$/i, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase()
-}
-
-function supplementalHypermemContextHits(context: unknown, existingHits: SearchHit[]): SearchHit[] {
-  if (typeof context !== "string" || !context.trim()) return []
-  const seen = new Set(existingHits.map((hit) => normalizeHypermemVisibleText(hit.text)).filter(Boolean))
-  const out: SearchHit[] = []
-  let current:
-    | {
-        label: "Fact" | "Graph Fact"
-        contentLines: string[]
-        temporal: string
-      }
-    | null = null
-
-  const flush = () => {
-    if (!current) return
-    const item = current
-    const content = item.contentLines.join(" ").replace(/\s+/g, " ").trim()
-    current = null
-    if (!content) return
-    const prefix = item.label === "Graph Fact" ? "[EVIDENCE]" : "[FACT]"
-    const sourceType = item.label === "Graph Fact" ? "graph_evidence" : "context_fact"
-    const text = renderHypermemHitText(prefix, content, item.temporal)
-    const key = normalizeHypermemVisibleText(text)
-    if (!key || seen.has(key)) return
-    seen.add(key)
-    out.push({
-      text,
-      score: null,
-      kind: "fact",
-      metadata: {
-        source: "hypermem_context",
-        hypermem: { source_type: sourceType },
-      },
-    })
-  }
-
-  for (const rawLine of context.split(/\r?\n/)) {
-    const line = rawLine.trim()
-    const start = line.match(/^\[(Fact|Graph Fact)\s+\d+\]\s*(.*)$/)
-    if (start) {
-      flush()
-      current = {
-        label: start[1] as "Fact" | "Graph Fact",
-        contentLines: start[2] ? [start[2]] : [],
-        temporal: "",
-      }
-      continue
-    }
-    if (!current || !line || line.startsWith("## ")) continue
-    const temporal = line.match(/^Time:\s*(.+)$/i)
-    if (temporal) {
-      current.temporal = temporal[1].trim()
-      continue
-    }
-    if (/^(Episode|Location):\s+/i.test(line)) continue
-    current.contentLines.push(line)
-  }
-  flush()
-  return out.slice(0, 12)
-}
-
-function supplementalHypermemEpisodeDetailHits(
-  query: string,
-  episodes: Array<{ score?: number | null; data?: Record<string, unknown> }>,
-  existingHits: SearchHit[]
-): SearchHit[] {
-  const queryTermSet = queryTerms(query)
-  const nameTerms = queryNameTerms(query)
-  const structuralTerms = new Set(
-    [...queryTermSet].filter((term) => !nameTerms.has(term) && !QUERY_FUNCTION_TERMS.has(term))
-  )
-  if (structuralTerms.size === 0) return []
-
-  const seen = new Set(existingHits.map((hit) => normalizeHypermemVisibleText(hit.text)).filter(Boolean))
-  const wantsNamedAnswer = /\bwho\b/i.test(query)
-  const out: SearchHit[] = []
-
-  for (const episode of episodes) {
-    const data = episode.data ?? {}
-    const description = String(data.episode_description ?? "").trim()
-    if (!description) continue
-    const lines = description
-      .split(/\r?\n+/)
-      .map((line) => line.replace(/\s+/g, " ").trim())
-      .filter(Boolean)
-    const episodeOverlap = Math.max(
-      0,
-      ...lines.map((line) => clauseOverlapScore(line, structuralTerms, new Set()))
-    )
-    if (episodeOverlap < 2) continue
-
-    const candidates = lines
-      .map((line, index) => {
-        const overlap = clauseOverlapScore(line, structuralTerms, new Set())
-        const namedAnswer = wantsNamedAnswer && /\b[A-Z][A-Za-z'-]+\s+[A-Z][A-Za-z'-]+\b/.test(line)
-        const quotedAnswer = /\b(?:what|which)\b/i.test(query) && /["'][^"']{2,80}["']/.test(line)
-        const keep = overlap > 0 || namedAnswer || quotedAnswer
-        const score = overlap + (namedAnswer ? 2 : 0) + (quotedAnswer ? 2 : 0)
-        return { line, index, keep, score }
-      })
-      .filter((item) => item.keep)
-      .sort((a, b) => b.score - a.score || a.index - b.index)
-      .slice(0, 3)
-
-    for (const candidate of candidates) {
-      const text = renderHypermemHitText("[FACT]", candidate.line, data.timestamp)
-      const key = normalizeHypermemVisibleText(text)
-      if (!key || seen.has(key)) continue
-      seen.add(key)
-      out.push({
-        text,
-        score: episode.score ?? null,
-        kind: "fact",
-        metadata: {
-          source: "hypermem_episode_detail",
-          hypermem: { source_type: "episode_detail" },
-        },
-      })
-      if (out.length >= 8) return out
-    }
-  }
-
-  return out
-}
-
-const QUERY_FUNCTION_TERMS = new Set([
-  "who",
-  "what",
-  "when",
-  "where",
-  "why",
-  "how",
-  "which",
-  "would",
-  "could",
-  "should",
-  "did",
-  "does",
-  "do",
-  "is",
-  "are",
-  "was",
-  "were",
-])
-
-function queryTerms(query: string): Set<string> {
-  const terms = new Set<string>()
-  for (const match of query.matchAll(/[A-Za-z][A-Za-z0-9']+/g)) {
-    const stemmed = simpleStem(match[0])
-    if (stemmed.length >= 3) terms.add(stemmed)
-  }
-  return terms
-}
-
-function queryNameTerms(query: string): Set<string> {
-  const terms = new Set<string>()
-  for (const match of query.matchAll(/\b[A-Z][A-Za-z0-9']+\b/g)) {
-    const raw = match[0]
-    if (
-      match.index === 0 &&
-      /^(What|When|Where|Who|Why|How|Would|Could|Should|Did|Does|Do|Is|Are|Was|Were)$/.test(raw)
-    ) {
-      continue
-    }
-    const stemmed = simpleStem(raw)
-    if (stemmed.length >= 3) terms.add(stemmed)
-  }
-  return terms
-}
-
-function hasNonNameQueryOverlap(content: string, query: string): boolean {
-  const terms = queryTerms(query)
-  if (terms.size === 0) return true
-  const nameTerms = queryNameTerms(query)
-  const contentTerms = queryTerms(content)
-  for (const term of terms) {
-    if (!nameTerms.has(term) && contentTerms.has(term)) return true
-  }
-  return terms.size === nameTerms.size
-}
-
-function clauseOverlapScore(clause: string, terms: Set<string>, nameTerms: Set<string>): number {
-  if (terms.size === 0) return 0
-  let score = 0
-  const seen = new Set<string>()
-  for (const match of clause.matchAll(/[A-Za-z][A-Za-z0-9']+/g)) {
-    const stemmed = simpleStem(match[0])
-    if (seen.has(stemmed) || nameTerms.has(stemmed) || !terms.has(stemmed)) continue
-    seen.add(stemmed)
-    score += 1
-  }
-  return score
-}
-
-function reorderLinkedEvidenceClauses(content: string, query: string): string {
-  const marker = " are semantically linked:"
-  const markerIndex = content.indexOf(marker)
-  if (!content.startsWith("Within ") || markerIndex < 0) return content
-  const head = content.slice(0, markerIndex + marker.length)
-  const summary = content.slice(markerIndex + marker.length).trim()
-  const clauses = summary
-    .split(/;\s*/)
-    .map((clause) => clause.trim())
-    .filter(Boolean)
-  if (clauses.length < 2) return content
-  const terms = queryTerms(query)
-  const nameTerms = queryNameTerms(query)
-  const ranked = clauses
-    .map((clause, index) => ({ clause, index, score: clauseOverlapScore(clause, terms, nameTerms) }))
-    .sort((a, b) => b.score - a.score || a.index - b.index)
-  if (ranked[0]?.score === 0) return content
-  return `${head} ${ranked
-    .filter((item) => item.score > 0)
-    .map((item) => item.clause)
-    .join("; ")}`
-}
-
-function renderEntityLinkageContent(content: string, query: string, sourceType: unknown): string {
-  const focused = reorderLinkedEvidenceClauses(content, query)
-  if (sourceType !== "entity_linkage") return focused
-  const marker = " are semantically linked:"
-  const markerIndex = focused.indexOf(marker)
-  if (!focused.startsWith("Within ") || markerIndex < 0) return focused
-  const lead = focused.slice("Within ".length, markerIndex)
-  const summary = focused.slice(markerIndex + marker.length).trim()
-  const firstComma = lead.indexOf(",")
-  if (firstComma < 0) return focused
-  const topic = lead.slice(0, firstComma).trim()
-  const candidates = lead
-    .slice(firstComma + 1)
-    .replace(/\band\b/g, ",")
-    .split(",")
-    .map((item) => item.trim())
-    .filter((item) => item && !/^[A-Z][a-z]+$/.test(item))
-    .slice(0, 10)
-  if (!topic || candidates.length === 0) return focused
-  const evidence = summary ? ` Evidence: ${summary}` : ""
-  return `Within ${topic}, candidate linked items: ${candidates.join(", ")}.${evidence}`
-}
-
-function matchesLinkedEvidenceActor(content: string, query: string): boolean {
-  const names = Array.from(queryNameTerms(query))
-  if (names.length !== 1) return true
-  const marker = " are semantically linked:"
-  const markerIndex = content.indexOf(marker)
-  const evidenceMarker = ". Evidence:"
-  const evidenceMarkerIndex = content.indexOf(evidenceMarker)
-  if (!content.startsWith("Within ") || (markerIndex < 0 && evidenceMarkerIndex < 0)) return true
-
-  const actor = names[0]
-  const body =
-    markerIndex >= 0
-      ? content.slice(markerIndex + marker.length)
-      : content.slice(evidenceMarkerIndex + evidenceMarker.length)
-  if (textHasCompatibleName(body, actor)) return true
-
-  const namedInBody = body.match(/\b[A-Z][A-Za-z0-9']+\b/g) ?? []
-  return !namedInBody.some((name) => !compatibleNameTerms(simpleStem(name), actor))
-}
-
-function textHasCompatibleName(text: string, actor: string): boolean {
-  for (const match of text.matchAll(/\b[A-Z][A-Za-z0-9']+\b/g)) {
-    if (compatibleNameTerms(simpleStem(match[0]), actor)) return true
-  }
-  return false
-}
-
-function compatibleNameTerms(left: string, right: string): boolean {
-  if (!left || !right) return false
-  if (left === right) return true
-  const minLength = Math.min(left.length, right.length)
-  return minLength >= 3 && (left.startsWith(right) || right.startsWith(left))
-}
-
-function simpleStem(term: string): string {
-  const lower = term.toLowerCase()
-  if (lower.endsWith("ied") && lower.length > 4) return `${lower.slice(0, -3)}y`
-  if (lower.endsWith("ing") && lower.length > 5) return lower.slice(0, -3)
-  if (lower.endsWith("ed") && lower.length > 4) return lower.slice(0, -2)
-  if (lower.endsWith("es") && lower.length > 4) return lower.slice(0, -2)
-  if (lower.endsWith("s") && lower.length > 3) return lower.slice(0, -1)
-  return lower
-}
-
-function actionQuestionParts(query: string): { actor: string | null; action: string } | null {
-  const match = query.match(/\bwhat\s+(?:did|does|do)\s+(.+?)\s+([A-Za-z][A-Za-z'-]+)\??$/i)
-  if (!match) return null
-  const actor = match[1]?.match(/\b[A-Z][A-Za-z0-9']+\b/)?.[0] ?? null
-  const verb = match[2]
-  if (!verb) return null
-  return { actor, action: simpleStem(verb) }
-}
-
-function matchesActionQuestionActor(content: string, query: string): boolean {
-  const parts = actionQuestionParts(query)
-  if (!parts?.actor) return true
-  if (!content.toLowerCase().includes(parts.action)) return true
-  const actorPattern = new RegExp(`\\b${parts.actor.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i")
-  if (!actorPattern.test(content)) return false
-
-  const actionPattern = new RegExp(`\\b${parts.action}\\w*\\b`, "i")
-  const clauses = content
-    .split(/[:.;]\s*|;\s*/)
-    .map((clause) => clause.trim())
-    .filter((clause) => actionPattern.test(clause))
-  if (clauses.length === 0) return true
-
-  let sawOtherNamedActor = false
-  for (const clause of clauses) {
-    const actionMatch = clause.match(actionPattern)
-    if (!actionMatch || actionMatch.index === undefined) continue
-    const beforeAction = clause.slice(0, actionMatch.index)
-    if (actorPattern.test(beforeAction)) return true
-
-    const namesBeforeAction = beforeAction.match(/\b[A-Z][A-Za-z0-9']+\b/g) ?? []
-    if (namesBeforeAction.some((name) => simpleStem(name) !== simpleStem(parts.actor!))) {
-      sawOtherNamedActor = true
-    }
-  }
-  return !sawOtherNamedActor && clauses.some((clause) => actorPattern.test(clause))
-}
-
-function cleanActionTarget(target: string): string {
-  const cleaned = target
-    .replace(/\s+/g, " ")
-    .replace(/^(?:a|an|the)\s+/i, "")
-    .replace(/\s+(?:for|to|about|regarding|with|during|when|because)\b.*$/i, "")
-    .replace(/[.;,:!?]+$/g, "")
-    .trim()
-  return cleaned.split(/\s+or\s+/i)[0]?.trim() ?? cleaned
-}
-
-function renderActionTargetContent(content: string, query: string): string {
-  const parts = actionQuestionParts(query)
-  if (!parts) return content
-  const action = parts.action
-  const lower = content.toLowerCase()
-  if (!lower.includes(action)) return content
-  if (!matchesActionQuestionActor(content, query)) return content
-  const escapedAction = action.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-  const patterns = [
-    new RegExp(`\\b${escapedAction}\\w*\\s+(?:and\\s+)?[A-Za-z][A-Za-z'-]*\\s+(.{3,120})`, "i"),
-    new RegExp(`\\b${escapedAction}\\w*\\s+(?:about|on|into|for)\\s+(.{3,120})`, "i"),
-  ]
-  for (const pattern of patterns) {
-    const match = content.match(pattern)
-    const target = match?.[1] ? cleanActionTarget(match[1]) : ""
-    if (target && target.length >= 3) {
-      return `Action target for ${action}: ${target}. Evidence: ${content}`
-    }
-  }
-  return content
-}
-
-function prioritizeActionTargetHits(hits: SearchHit[], query: string): SearchHit[] {
-  const parts = actionQuestionParts(query)
-  if (!parts) return hits
-  const marker = `Action target for ${parts.action}:`
-  return hits
-    .map((hit, index) => ({ hit, index, isTarget: hit.text.includes(marker) }))
-    .sort((a, b) => Number(b.isTarget) - Number(a.isTarget) || a.index - b.index)
-    .map((item) => item.hit)
-}
-
-function answerVisibleContent(hit: SearchHit): string {
-  return hit.text.replace(/^\[[A-Z_]+\]\s*/, "")
 }
 
 const HYPERMEM_METADATA_SCALAR_KEYS = [
@@ -488,6 +115,7 @@ const HYPERMEM_METADATA_SCALAR_KEYS = [
   "episode_uuid",
   "subject",
   "title",
+  "episode_detail_kind",
 ] as const
 
 const HYPERMEM_METADATA_LIST_KEYS = [
@@ -514,7 +142,10 @@ function slimHypermemMetadata(data: Record<string, unknown> | undefined): Record
     const value = data[key]
     if (Array.isArray(value)) {
       out[key] = value
-        .filter((item) => typeof item === "string" || typeof item === "number" || typeof item === "boolean")
+        .filter(
+          (item) =>
+            typeof item === "string" || typeof item === "number" || typeof item === "boolean"
+        )
         .slice(0, key === "keywords" ? 24 : 12)
     }
   }
@@ -537,19 +168,22 @@ export async function armSearch(args: {
   try {
     switch (config.arm) {
       case "hypermem": {
-        const outputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE ?? "011"
+        const outputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE ?? "111"
         const r = await client.hypermemSearch({
           bonfireId: config.bonfireId,
           query,
-          profile: process.env.BONFIRES_HYPERMEM_PROFILE ?? "nlp_taxonomy_v1",
-          initialCandidates: parseInt(process.env.BONFIRES_HYPERMEM_INITIAL_CANDIDATES ?? "100", 10),
-          topicTopK: parseInt(process.env.BONFIRES_HYPERMEM_TOPIC_TOP_K ?? "15", 10),
-          episodeTopK: parseInt(process.env.BONFIRES_HYPERMEM_EPISODE_TOP_K ?? "20", 10),
-          factTopK: parseInt(process.env.BONFIRES_HYPERMEM_FACT_TOP_K ?? "30", 10),
+          profile: process.env.BONFIRES_HYPERMEM_PROFILE ?? "nlp_single_graph_v1",
+          initialCandidates: parseInt(
+            process.env.BONFIRES_HYPERMEM_INITIAL_CANDIDATES ?? "100",
+            10
+          ),
+          topicTopK: parseInt(process.env.BONFIRES_HYPERMEM_TOPIC_TOP_K ?? "4", 10),
+          episodeTopK: parseInt(process.env.BONFIRES_HYPERMEM_EPISODE_TOP_K ?? "6", 10),
+          factTopK: parseInt(process.env.BONFIRES_HYPERMEM_FACT_TOP_K ?? "10", 10),
           outputType,
           useReranker: process.env.BONFIRES_HYPERMEM_RERANKER !== "0",
         })
-        const facts = prioritizeActionTargetHits((r.facts ?? [])
+        const facts = (r.facts ?? [])
           .map((fact) => {
             const data = fact.data ?? {}
             const content = String(data.content ?? data.fact ?? data.summary ?? "").trim()
@@ -561,17 +195,8 @@ export async function armSearch(args: {
             return { fact, content, timestamp }
           })
           .filter((item) => item.content)
-          .filter((item) => matchesLinkedEvidenceActor(item.content, query))
-          .filter((item) => matchesActionQuestionActor(item.content, query))
           .map(({ fact, content, timestamp }) => ({
-            text: renderHypermemHitText(
-              "[FACT]",
-              renderActionTargetContent(
-                renderEntityLinkageContent(content, query, fact.data?.source_type),
-                query
-              ),
-              timestamp
-            ),
+            text: renderHypermemHitText("[FACT]", content, timestamp),
             score: fact.score ?? null,
             kind: "fact" as const,
             metadata: {
@@ -579,11 +204,12 @@ export async function armSearch(args: {
               hypermem: slimHypermemMetadata(fact.data),
             },
           }))
-          .filter((hit) => matchesLinkedEvidenceActor(answerVisibleContent(hit), query)), query)
         const episodes = (r.episodes ?? [])
           .map((episode) => {
             const data = episode.data ?? {}
-            const content = String(data.summary ?? data.subject ?? data.episode_description ?? "").trim()
+            const content = String(
+              data.summary ?? data.subject ?? data.episode_description ?? ""
+            ).trim()
             const timestamp = data.timestamp
             return { episode, content, timestamp }
           })
@@ -612,7 +238,7 @@ export async function armSearch(args: {
               hypermem: slimHypermemMetadata(topic.data),
             },
           }))
-        const evidence = prioritizeActionTargetHits((r.evidence ?? [])
+        const evidence = (r.evidence ?? [])
           .map((item) => {
             const data = item.data ?? {}
             const content = String(data.content ?? data.fact ?? data.summary ?? "").trim()
@@ -620,18 +246,8 @@ export async function armSearch(args: {
             return { item, content, timestamp }
           })
           .filter((item) => item.content)
-          .filter((item) => matchesLinkedEvidenceActor(item.content, query))
-          .filter((item) => hasNonNameQueryOverlap(item.content, query))
-          .filter((item) => matchesActionQuestionActor(item.content, query))
           .map(({ item, content, timestamp }) => ({
-            text: renderHypermemHitText(
-              "[EVIDENCE]",
-              renderActionTargetContent(
-                renderEntityLinkageContent(content, query, item.data?.source_type),
-                query
-              ),
-              timestamp
-            ),
+            text: renderHypermemHitText("[EVIDENCE]", content, timestamp),
             score: item.score ?? null,
             kind: "fact" as const,
             metadata: {
@@ -639,14 +255,8 @@ export async function armSearch(args: {
               hypermem: slimHypermemMetadata(item.data),
             },
           }))
-          .filter((hit) => matchesLinkedEvidenceActor(answerVisibleContent(hit), query)), query)
         const ordered = orderedHypermemHits(outputType, { topics, episodes, facts, evidence })
-        const contextSupplement = supplementalHypermemContextHits(r.context, ordered)
-        return [
-          ...ordered,
-          ...contextSupplement,
-          ...supplementalHypermemEpisodeDetailHits(query, r.episodes ?? [], [...ordered, ...contextSupplement]),
-        ]
+        return ordered
       }
       case "smart_chunks_only": {
         // Engram replication — pure hybrid retrieval over the trimtab chunks

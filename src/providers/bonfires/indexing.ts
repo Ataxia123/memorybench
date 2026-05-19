@@ -376,13 +376,13 @@ export async function runIndexingPipeline(args: {
       )
       await client.hypermemStackIndex({
         bonfireId,
-        profile: process.env.BONFIRES_HYPERMEM_PROFILE ?? "nlp_taxonomy_v1",
+        profile: process.env.BONFIRES_HYPERMEM_PROFILE ?? "nlp_single_graph_v1",
         stackPayloads,
         initialCandidates: parseInt(process.env.BONFIRES_HYPERMEM_INITIAL_CANDIDATES ?? "100", 10),
-        topicTopK: parseInt(process.env.BONFIRES_HYPERMEM_TOPIC_TOP_K ?? "15", 10),
-        episodeTopK: parseInt(process.env.BONFIRES_HYPERMEM_EPISODE_TOP_K ?? "20", 10),
-        factTopK: parseInt(process.env.BONFIRES_HYPERMEM_FACT_TOP_K ?? "30", 10),
-        outputType: process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE ?? "011",
+        topicTopK: parseInt(process.env.BONFIRES_HYPERMEM_TOPIC_TOP_K ?? "4", 10),
+        episodeTopK: parseInt(process.env.BONFIRES_HYPERMEM_EPISODE_TOP_K ?? "6", 10),
+        factTopK: parseInt(process.env.BONFIRES_HYPERMEM_FACT_TOP_K ?? "10", 10),
+        outputType: process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE ?? "111",
         useReranker: process.env.BONFIRES_HYPERMEM_RERANKER !== "0",
       })
       return

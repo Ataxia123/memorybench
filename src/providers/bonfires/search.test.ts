@@ -1,5 +1,5 @@
-import { describe, it, expect, mock, spyOn } from "bun:test";
-import { armSearch, flattenFacts } from "./search.js";
+import { describe, it, expect, mock, spyOn } from "bun:test"
+import { armSearch, flattenFacts } from "./search.js"
 
 describe("flattenFacts", () => {
   it("maps kg_delve edges to {text, score}", () => {
@@ -8,67 +8,67 @@ describe("flattenFacts", () => {
         { fact: "Alice killed Bob", score: 0.9 },
         { fact: "Bob owned a watch", score: 0.7 },
       ],
-    });
+    })
     expect(out).toEqual([
       { text: "Alice killed Bob", score: 0.9, kind: "fact" },
       { text: "Bob owned a watch", score: 0.7, kind: "fact" },
-    ]);
-  });
+    ])
+  })
 
   it("returns [] when edges missing", () => {
-    expect(flattenFacts({})).toEqual([]);
-  });
-});
+    expect(flattenFacts({})).toEqual([])
+  })
+})
 
 describe("armSearch", () => {
-  const baseCfg = { bonfireId: "bf", arm: "vector" as const, apiUrl: "", apiKey: "" };
+  const baseCfg = { bonfireId: "bf", arm: "vector" as const, apiUrl: "", apiKey: "" }
 
   it("vector arm calls vectorSearch with k=10", async () => {
     const client = {
       vectorSearch: mock(async () => [{ text: "chunk1", score: 0.8 }]),
       kgDelve: mock(async () => ({ edges: [] })),
-    };
+    }
     const out = await armSearch({
       client: client as unknown as Parameters<typeof armSearch>[0]["client"],
       query: "who",
       config: { ...baseCfg, arm: "vector" },
-    });
+    })
     expect(client.vectorSearch.mock.calls[0][0]).toEqual({
       bonfireId: "bf",
       query: "who",
       limit: 10,
-    });
-    expect(out).toEqual([{ text: "chunk1", score: 0.8, kind: "chunk" }]);
-  });
+    })
+    expect(out).toEqual([{ text: "chunk1", score: 0.8, kind: "chunk" }])
+  })
 
   it("graph arm calls kgDelve with smart=false", async () => {
     const client = {
       vectorSearch: mock(async () => []),
       kgDelve: mock(async () => ({ edges: [{ fact: "f1", score: 0.5 }] })),
-    };
+    }
     await armSearch({
       client: client as unknown as Parameters<typeof armSearch>[0]["client"],
       query: "who",
       config: { ...baseCfg, arm: "graph" },
-    });
+    })
     expect(client.kgDelve.mock.calls[0][0]).toEqual({
       bonfireId: "bf",
       query: "who",
       numResults: 10,
       smart: false,
-    });
-  });
+    })
+  })
 
   it("smart arm calls kgDelve with smart=true node/edge recipes", async () => {
     const client = {
       vectorSearch: mock(async () => []),
       kgDelve: mock(async () => ({ edges: [{ fact: "f1", score: 0.5 }] })),
-    };
+    }
     await armSearch({
       client: client as unknown as Parameters<typeof armSearch>[0]["client"],
       query: "who",
       config: { ...baseCfg, arm: "smart" },
-    });
+    })
     expect(client.kgDelve.mock.calls[0][0]).toEqual({
       bonfireId: "bf",
       query: "who",
@@ -77,7 +77,7 @@ describe("armSearch", () => {
       searchRecipe: "NODE_HYBRID_SEARCH_RRF",
       bfsScopes: undefined,
       rerankScopes: undefined,
-    });
+    })
     expect(client.kgDelve.mock.calls[1][0]).toEqual({
       bonfireId: "bf",
       query: "who",
@@ -86,34 +86,34 @@ describe("armSearch", () => {
       searchRecipe: "EDGE_HYBRID_SEARCH_CROSS_ENCODER",
       bfsScopes: undefined,
       rerankScopes: undefined,
-    });
-  });
+    })
+  })
 
   it("returns [] on search error rather than throwing", async () => {
-    const errSpy = spyOn(console, "error").mockImplementation(() => {});
+    const errSpy = spyOn(console, "error").mockImplementation(() => {})
     const client = {
       vectorSearch: mock(async () => {
-        throw new Error("boom");
+        throw new Error("boom")
       }),
       kgDelve: mock(async () => ({ edges: [] })),
-    };
+    }
     const out = await armSearch({
       client: client as unknown as Parameters<typeof armSearch>[0]["client"],
       query: "who",
       config: { ...baseCfg, arm: "vector" },
-    });
-    expect(out).toEqual([]);
-    errSpy.mockRestore();
-  });
+    })
+    expect(out).toEqual([])
+    errSpy.mockRestore()
+  })
 
   it("hypermem arm defaults to score-ranked context and does not expose fact bookkeeping timestamps", async () => {
-    const prevOutputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE;
-    const prevOrder = process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;
-    const prevReranker = process.env.BONFIRES_HYPERMEM_RERANKER;
+    const prevOutputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
+    const prevOrder = process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+    const prevReranker = process.env.BONFIRES_HYPERMEM_RERANKER
     try {
-      process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = "011";
-      delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;
-      process.env.BONFIRES_HYPERMEM_RERANKER = "0";
+      process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = "011"
+      delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+      process.env.BONFIRES_HYPERMEM_RERANKER = "0"
       const client = {
         hypermemSearch: mock(async () => ({
           topics: [{ score: 0.3, data: { title: "Topic", summary: "Topic summary" } }],
@@ -151,39 +151,39 @@ describe("armSearch", () => {
             },
           ],
         })),
-      };
+      }
       const out = await armSearch({
         client: client as unknown as Parameters<typeof armSearch>[0]["client"],
         query: "when",
         config: { ...baseCfg, arm: "hypermem" },
-      });
-      expect(client.hypermemSearch.mock.calls[0][0].outputType).toBe("011");
-      expect(out.map((h) => h.kind)).toEqual(["episode", "fact", "fact", "fact", "fact"]);
-      expect(out[0].text).toBe("[EPISODE] Episode summary [occurred 8 May 2023]");
-      expect(out[1].text).toBe("[FACT] Grammar fact");
-      expect(out[2].text).toBe("[FACT] Statement fact [occurred 7 May 2023]");
+      })
+      expect(client.hypermemSearch.mock.calls[0][0].outputType).toBe("011")
+      expect(out.map((h) => h.kind)).toEqual(["episode", "fact", "fact", "fact", "fact"])
+      expect(out[0].text).toBe("[EPISODE] Episode summary [occurred 8 May 2023]")
+      expect(out[1].text).toBe("[FACT] Grammar fact")
+      expect(out[2].text).toBe("[FACT] Statement fact [occurred 7 May 2023]")
       expect(out[3].text).toBe(
         "[FACT] Caroline went to an LGBTQ support group yesterday. [resolved relative time: yesterday = 7 May 2023; anchor: 8 May 2023]"
-      );
-      expect(out[4].text).toBe("[FACT] Caroline attended an LGBTQ support group on May 7, 2023.");
+      )
+      expect(out[4].text).toBe("[FACT] Caroline attended an LGBTQ support group on May 7, 2023.")
     } finally {
-      if (prevOutputType === undefined) delete process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE;
-      else process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = prevOutputType;
-      if (prevOrder === undefined) delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;
-      else process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = prevOrder;
-      if (prevReranker === undefined) delete process.env.BONFIRES_HYPERMEM_RERANKER;
-      else process.env.BONFIRES_HYPERMEM_RERANKER = prevReranker;
+      if (prevOutputType === undefined) delete process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
+      else process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = prevOutputType
+      if (prevOrder === undefined) delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+      else process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = prevOrder
+      if (prevReranker === undefined) delete process.env.BONFIRES_HYPERMEM_RERANKER
+      else process.env.BONFIRES_HYPERMEM_RERANKER = prevReranker
     }
-  });
+  })
 
   it("hypermem arm can interleave direct facts with graph evidence", async () => {
-    const prevOutputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE;
-    const prevOrder = process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;
-    const prevReranker = process.env.BONFIRES_HYPERMEM_RERANKER;
+    const prevOutputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
+    const prevOrder = process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+    const prevReranker = process.env.BONFIRES_HYPERMEM_RERANKER
     try {
-      process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = "011";
-      process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = "interleave";
-      process.env.BONFIRES_HYPERMEM_RERANKER = "0";
+      process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = "011"
+      process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = "interleave"
+      process.env.BONFIRES_HYPERMEM_RERANKER = "0"
       const client = {
         hypermemSearch: mock(async () => ({
           episodes: [{ score: 0.2, data: { summary: "Episode summary" } }],
@@ -196,37 +196,37 @@ describe("armSearch", () => {
             { score: 0.8, data: { content: "Graph evidence two" } },
           ],
         })),
-      };
+      }
       const out = await armSearch({
         client: client as unknown as Parameters<typeof armSearch>[0]["client"],
         query: "graph evidence",
         config: { ...baseCfg, arm: "hypermem" },
-      });
+      })
       expect(out.map((h) => h.text)).toEqual([
         "[FACT] Direct fact one",
         "[EVIDENCE] Graph evidence one",
         "[FACT] Direct fact two",
         "[EVIDENCE] Graph evidence two",
         "[EPISODE] Episode summary",
-      ]);
+      ])
     } finally {
-      if (prevOutputType === undefined) delete process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE;
-      else process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = prevOutputType;
-      if (prevOrder === undefined) delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;
-      else process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = prevOrder;
-      if (prevReranker === undefined) delete process.env.BONFIRES_HYPERMEM_RERANKER;
-      else process.env.BONFIRES_HYPERMEM_RERANKER = prevReranker;
+      if (prevOutputType === undefined) delete process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
+      else process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = prevOutputType
+      if (prevOrder === undefined) delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+      else process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = prevOrder
+      if (prevReranker === undefined) delete process.env.BONFIRES_HYPERMEM_RERANKER
+      else process.env.BONFIRES_HYPERMEM_RERANKER = prevReranker
     }
-  });
+  })
 
-  it("hypermem arm preserves server-composed context facts missing from arrays", async () => {
-    const prevOutputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE;
-    const prevOrder = process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;
-    const prevReranker = process.env.BONFIRES_HYPERMEM_RERANKER;
+  it("hypermem arm ignores formatted context and trusts returned arrays", async () => {
+    const prevOutputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
+    const prevOrder = process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+    const prevReranker = process.env.BONFIRES_HYPERMEM_RERANKER
     try {
-      process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = "011";
-      process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = "score";
-      process.env.BONFIRES_HYPERMEM_RERANKER = "0";
+      process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = "011"
+      process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = "score"
+      process.env.BONFIRES_HYPERMEM_RERANKER = "0"
       const client = {
         hypermemSearch: mock(async () => ({
           context: [
@@ -241,79 +241,297 @@ describe("armSearch", () => {
             "[Graph Fact 1] Context-only graph fact",
             "  Time: 2023-07-16T10:00:00.000Z",
           ].join("\n"),
-          facts: [{ score: 0.3, data: { content: "Direct fact one", temporal: "2023-07-15T13:53:00.000Z" } }],
+          facts: [
+            {
+              score: 0.3,
+              data: { content: "Direct fact one", temporal: "2023-07-15T13:53:00.000Z" },
+            },
+          ],
+          evidence: [
+            {
+              score: 0.2,
+              data: { content: "Returned graph fact", temporal: "2023-07-16T10:00:00.000Z" },
+            },
+          ],
         })),
-      };
+      }
       const out = await armSearch({
         client: client as unknown as Parameters<typeof armSearch>[0]["client"],
         query: "observation",
         config: { ...baseCfg, arm: "hypermem" },
-      });
+      })
       expect(out.map((h) => h.text)).toEqual([
         "[FACT] Direct fact one [occurred 15 July 2023]",
-        "[FACT] Context-only observation fact [occurred 15 July 2023]",
-        "[EVIDENCE] Context-only graph fact [occurred 16 July 2023]",
-      ]);
+        "[EVIDENCE] Returned graph fact [occurred 16 July 2023]",
+      ])
     } finally {
-      if (prevOutputType === undefined) delete process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE;
-      else process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = prevOutputType;
-      if (prevOrder === undefined) delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;
-      else process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = prevOrder;
-      if (prevReranker === undefined) delete process.env.BONFIRES_HYPERMEM_RERANKER;
-      else process.env.BONFIRES_HYPERMEM_RERANKER = prevReranker;
+      if (prevOutputType === undefined) delete process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
+      else process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = prevOutputType
+      if (prevOrder === undefined) delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+      else process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = prevOrder
+      if (prevReranker === undefined) delete process.env.BONFIRES_HYPERMEM_RERANKER
+      else process.env.BONFIRES_HYPERMEM_RERANKER = prevReranker
     }
-  });
+  })
 
-  it("hypermem arm surfaces structural episode detail lines from retrieved episodes", async () => {
-    const prevOutputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE;
-    const prevOrder = process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;
-    const prevReranker = process.env.BONFIRES_HYPERMEM_RERANKER;
+  it("hypermem arm preserves server-resolved relative-time facts", async () => {
+    const prevOutputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
+    const prevOrder = process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+    const prevReranker = process.env.BONFIRES_HYPERMEM_RERANKER
     try {
-      process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = "011";
-      process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = "score";
-      process.env.BONFIRES_HYPERMEM_RERANKER = "0";
+      process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = "011"
+      process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = "score"
+      process.env.BONFIRES_HYPERMEM_RERANKER = "0"
+      const content =
+        "Melanie and her family celebrated her daughter's birthday with a concert last night."
       const client = {
         hypermemSearch: mock(async () => ({
-          episodes: [
+          context: [
+            "## Relevant Facts:",
+            `[Fact 1] ${content} [resolved relative time: last night = 13 August 2023; anchor: 14 August 2023]`,
+            "  Time: resolved relative time: last night = 13 August 2023; anchor: 14 August 2023",
+          ].join("\n"),
+          facts: [
+            {
+              score: 0.8,
+              source: "statement",
+              data: {
+                content: `${content} [resolved relative time: last night = 13 August 2023; anchor: 14 August 2023]`,
+                temporal:
+                  "resolved relative time: last night = 13 August 2023; anchor: 14 August 2023",
+                source_type: "statement",
+              },
+            },
+          ],
+        })),
+      }
+      const out = await armSearch({
+        client: client as unknown as Parameters<typeof armSearch>[0]["client"],
+        query: "When is Melanie's daughter's birthday?",
+        config: { ...baseCfg, arm: "hypermem" },
+      })
+
+      const birthdayHits = out.map((h) => h.text).filter((text) => text.includes("birthday"))
+      expect(birthdayHits.length).toBe(1)
+      expect(birthdayHits.every((text) => text.includes("last night = 13 August 2023"))).toBe(true)
+      expect(birthdayHits.some((text) => text.includes("[occurred 14 August 2023]"))).toBe(false)
+    } finally {
+      if (prevOutputType === undefined) delete process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
+      else process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = prevOutputType
+      if (prevOrder === undefined) delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+      else process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = prevOrder
+      if (prevReranker === undefined) delete process.env.BONFIRES_HYPERMEM_RERANKER
+      else process.env.BONFIRES_HYPERMEM_RERANKER = prevReranker
+    }
+  })
+
+  it("hypermem arm does not split resolved relative-time brackets inside linked aggregates", async () => {
+    const prevOutputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
+    const prevOrder = process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+    const prevReranker = process.env.BONFIRES_HYPERMEM_RERANKER
+    try {
+      process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = "011"
+      process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = "score"
+      process.env.BONFIRES_HYPERMEM_RERANKER = "0"
+      const client = {
+        hypermemSearch: mock(async () => ({
+          facts: [
+            {
+              score: 0.8,
+              source: "entity_linkage",
+              data: {
+                source_type: "entity_linkage",
+                temporal: "2023-07-06T13:00:00.000Z",
+                content:
+                  "Within Family and Relationships, Friends and Caroline are semantically linked: Caroline and her friends had a picnic last week. [resolved relative time: last week = the week before 6 July 2023; anchor: 6 July 2023]; Friends and family make a significant difference in Caroline's transition.",
+              },
+            },
+          ],
+        })),
+      }
+      const out = await armSearch({
+        client: client as unknown as Parameters<typeof armSearch>[0]["client"],
+        query: "When did Caroline meet friends?",
+        config: { ...baseCfg, arm: "hypermem" },
+      })
+
+      expect(out[0].text).toContain("anchor: 6 July 2023]")
+      expect(out[0].text).not.toContain("anchor: 6 July 2023; Friends")
+    } finally {
+      if (prevOutputType === undefined) delete process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
+      else process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = prevOutputType
+      if (prevOrder === undefined) delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+      else process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = prevOrder
+      if (prevReranker === undefined) delete process.env.BONFIRES_HYPERMEM_RERANKER
+      else process.env.BONFIRES_HYPERMEM_RERANKER = prevReranker
+    }
+  })
+
+  it("hypermem arm surfaces server-side episode detail facts", async () => {
+    const prevOutputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
+    const prevOrder = process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+    const prevReranker = process.env.BONFIRES_HYPERMEM_RERANKER
+    try {
+      process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = "011"
+      process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = "score"
+      process.env.BONFIRES_HYPERMEM_RERANKER = "0"
+      const client = {
+        hypermemSearch: mock(async () => ({
+          facts: [
             {
               score: 0.7,
+              source: "episode_detail",
               data: {
-                summary: "Melanie and her family celebrated her daughter's birthday with a concert.",
+                source_type: "episode_detail",
+                content: "Melanie said that Matt Patterson is very talented.",
+                temporal: "2023-08-14T14:56:00.000Z",
+              },
+            },
+          ],
+        })),
+      }
+      const out = await armSearch({
+        client: client as unknown as Parameters<typeof armSearch>[0]["client"],
+        query: "Who performed at the concert at Melanie's daughter's birthday?",
+        config: { ...baseCfg, arm: "hypermem" },
+      })
+      expect(out.map((h) => h.text)).toEqual([
+        "[FACT] Melanie said that Matt Patterson is very talented. [occurred 14 August 2023]",
+      ])
+      expect(out[0].metadata?.source).toBe("episode_detail")
+    } finally {
+      if (prevOutputType === undefined) delete process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
+      else process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = prevOutputType
+      if (prevOrder === undefined) delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+      else process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = prevOrder
+      if (prevReranker === undefined) delete process.env.BONFIRES_HYPERMEM_RERANKER
+      else process.env.BONFIRES_HYPERMEM_RERANKER = prevReranker
+    }
+  })
+
+  it("hypermem arm preserves server-side compact episode detail bundles", async () => {
+    const prevOutputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
+    const prevOrder = process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+    const prevReranker = process.env.BONFIRES_HYPERMEM_RERANKER
+    try {
+      process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = "011"
+      process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = "score"
+      process.env.BONFIRES_HYPERMEM_RERANKER = "0"
+      const client = {
+        hypermemSearch: mock(async () => ({
+          evidence: [
+            {
+              score: 0.5,
+              data: {
+                source_type: "graph_evidence",
+                content: "Melanie enjoys hiking in the mountains.",
+                temporal: "2023-07-15T14:57:00.000Z",
+              },
+            },
+          ],
+          facts: [
+            {
+              score: 0.92,
+              source: "episode_detail",
+              data: {
+                source_type: "episode_detail",
+                episode_detail_kind: "bundle",
+                temporal: "2023-07-20T21:42:00.000Z",
+                content: [
+                  "Melanie's family roasts marshmallows during their camping trip.",
+                  "Melanie's family tells stories around the campfire during their camping trip.",
+                  "Melanie's family enjoys each other's company during their camping trip.",
+                ].join("; "),
+              },
+            },
+          ],
+        })),
+      }
+      const out = await armSearch({
+        client: client as unknown as Parameters<typeof armSearch>[0]["client"],
+        query: "What does Melanie do with her family on hikes?",
+        config: { ...baseCfg, arm: "hypermem" },
+      })
+      expect(out[0].text).toContain("roasts marshmallows")
+      expect(out[0].text).toContain("tells stories around the campfire")
+      expect((out[0].metadata?.hypermem as Record<string, unknown>).episode_detail_kind).toBe(
+        "bundle"
+      )
+      expect(out[1].text).toBe(
+        "[EVIDENCE] Melanie enjoys hiking in the mountains. [occurred 15 July 2023]"
+      )
+    } finally {
+      if (prevOutputType === undefined) delete process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
+      else process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = prevOutputType
+      if (prevOrder === undefined) delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+      else process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = prevOrder
+      if (prevReranker === undefined) delete process.env.BONFIRES_HYPERMEM_RERANKER
+      else process.env.BONFIRES_HYPERMEM_RERANKER = prevReranker
+    }
+  })
+
+  it("hypermem arm does not promote weak actor-only bundles for object questions", async () => {
+    const prevOutputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
+    const prevOrder = process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+    const prevReranker = process.env.BONFIRES_HYPERMEM_RERANKER
+    try {
+      process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = "011"
+      process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = "score"
+      process.env.BONFIRES_HYPERMEM_RERANKER = "0"
+      const client = {
+        hypermemSearch: mock(async () => ({
+          evidence: [
+            {
+              score: 0.9,
+              data: {
+                source_type: "graph_evidence",
+                content: "Melanie and her kids made a cup with a dog face on it using clay.",
+              },
+            },
+          ],
+          episodes: [
+            {
+              score: 0.8,
+              data: {
+                summary: "Melanie's family had a celebration.",
                 timestamp: "2023-08-14T14:56:00.000Z",
                 episode_description: [
-                  "Melanie and her family celebrated her daughter's birthday with a concert last night.",
-                  "Melanie said that Matt Patterson is very talented.",
-                  "Melanie said that Matt Patterson's voice and songs were amazing.",
+                  "Melanie feels lucky to have her family.",
+                  "Melanie saw her kids smile during the celebration.",
+                  "Caroline expressed admiration for the love someone has for their kids.",
                 ].join("\n"),
               },
             },
           ],
         })),
-      };
+      }
       const out = await armSearch({
         client: client as unknown as Parameters<typeof armSearch>[0]["client"],
-        query: "Who performed at the concert at Melanie's daughter's birthday?",
+        query: "What kind of pot did Mel and her kids make with clay?",
         config: { ...baseCfg, arm: "hypermem" },
-      });
-      expect(out.some((h) => h.text.includes("Matt Patterson is very talented"))).toBe(true);
+      })
+      expect(out[0].text).toBe(
+        "[EVIDENCE] Melanie and her kids made a cup with a dog face on it using clay."
+      )
+      expect(out.some((hit) => hit.kind === "fact" && hit.text.includes("celebration"))).toBe(false)
     } finally {
-      if (prevOutputType === undefined) delete process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE;
-      else process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = prevOutputType;
-      if (prevOrder === undefined) delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;
-      else process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = prevOrder;
-      if (prevReranker === undefined) delete process.env.BONFIRES_HYPERMEM_RERANKER;
-      else process.env.BONFIRES_HYPERMEM_RERANKER = prevReranker;
+      if (prevOutputType === undefined) delete process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
+      else process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = prevOutputType
+      if (prevOrder === undefined) delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+      else process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = prevOrder
+      if (prevReranker === undefined) delete process.env.BONFIRES_HYPERMEM_RERANKER
+      else process.env.BONFIRES_HYPERMEM_RERANKER = prevReranker
     }
-  });
+  })
 
-  it("hypermem arm renders entity linkage leads as candidate items from the fact structure", async () => {
-    const prevOutputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE;
-    const prevOrder = process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;
-    const prevReranker = process.env.BONFIRES_HYPERMEM_RERANKER;
+  it("hypermem arm preserves server-rendered entity linkage candidate items", async () => {
+    const prevOutputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
+    const prevOrder = process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+    const prevReranker = process.env.BONFIRES_HYPERMEM_RERANKER
     try {
-      process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = "011";
-      delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;
-      process.env.BONFIRES_HYPERMEM_RERANKER = "0";
+      process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = "011"
+      delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+      process.env.BONFIRES_HYPERMEM_RERANKER = "0"
       const client = {
         hypermemSearch: mock(async () => ({
           facts: [
@@ -322,38 +540,38 @@ describe("armSearch", () => {
               data: {
                 source_type: "entity_linkage",
                 content:
-                  "Within Events and Activities, family camping trip, pottery workshop, Melanie, and Caroline are semantically linked: Melanie took her kids to a pottery workshop.",
+                  "Within Events and Activities, candidate linked items: family camping trip, pottery workshop. Evidence: Melanie took her kids to a pottery workshop.",
               },
             },
           ],
         })),
-      };
+      }
       const out = await armSearch({
         client: client as unknown as Parameters<typeof armSearch>[0]["client"],
         query: "What activities does Melanie partake in?",
         config: { ...baseCfg, arm: "hypermem" },
-      });
+      })
       expect(out[0].text).toBe(
         "[FACT] Within Events and Activities, candidate linked items: family camping trip, pottery workshop. Evidence: Melanie took her kids to a pottery workshop."
-      );
+      )
     } finally {
-      if (prevOutputType === undefined) delete process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE;
-      else process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = prevOutputType;
-      if (prevOrder === undefined) delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;
-      else process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = prevOrder;
-      if (prevReranker === undefined) delete process.env.BONFIRES_HYPERMEM_RERANKER;
-      else process.env.BONFIRES_HYPERMEM_RERANKER = prevReranker;
+      if (prevOutputType === undefined) delete process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
+      else process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = prevOutputType
+      if (prevOrder === undefined) delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+      else process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = prevOrder
+      if (prevReranker === undefined) delete process.env.BONFIRES_HYPERMEM_RERANKER
+      else process.env.BONFIRES_HYPERMEM_RERANKER = prevReranker
     }
-  });
+  })
 
-  it("hypermem arm focuses linked evidence clauses using procedural query overlap", async () => {
-    const prevOutputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE;
-    const prevOrder = process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;
-    const prevReranker = process.env.BONFIRES_HYPERMEM_RERANKER;
+  it("hypermem arm preserves server-focused linked evidence clauses", async () => {
+    const prevOutputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
+    const prevOrder = process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+    const prevReranker = process.env.BONFIRES_HYPERMEM_RERANKER
     try {
-      process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = "011";
-      delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;
-      process.env.BONFIRES_HYPERMEM_RERANKER = "0";
+      process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = "011"
+      delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+      process.env.BONFIRES_HYPERMEM_RERANKER = "0"
       const client = {
         hypermemSearch: mock(async () => ({
           facts: [
@@ -362,86 +580,78 @@ describe("armSearch", () => {
               data: {
                 source_type: "graph_evidence",
                 content:
-                  "Within Emotional States, Melanie and Caroline are semantically linked: Melanie expressed that she is glad they can be on this trip together.; Melanie was scared after the roadtrip accident.; Caroline was thankful everyone was okay.",
+                  "Within Emotional States, Melanie and Caroline are semantically linked: Melanie was scared after the roadtrip accident.",
               },
             },
           ],
         })),
-      };
+      }
       const out = await armSearch({
         client: client as unknown as Parameters<typeof armSearch>[0]["client"],
         query: "Would Melanie go on another roadtrip soon?",
         config: { ...baseCfg, arm: "hypermem" },
-      });
+      })
       expect(out[0].text).toBe(
         "[FACT] Within Emotional States, Melanie and Caroline are semantically linked: Melanie was scared after the roadtrip accident."
-      );
+      )
     } finally {
-      if (prevOutputType === undefined) delete process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE;
-      else process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = prevOutputType;
-      if (prevOrder === undefined) delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;
-      else process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = prevOrder;
-      if (prevReranker === undefined) delete process.env.BONFIRES_HYPERMEM_RERANKER;
-      else process.env.BONFIRES_HYPERMEM_RERANKER = prevReranker;
+      if (prevOutputType === undefined) delete process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
+      else process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = prevOutputType
+      if (prevOrder === undefined) delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+      else process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = prevOrder
+      if (prevReranker === undefined) delete process.env.BONFIRES_HYPERMEM_RERANKER
+      else process.env.BONFIRES_HYPERMEM_RERANKER = prevReranker
     }
-  });
+  })
 
-  it("hypermem arm drops linked evidence when only a different named actor appears in the body", async () => {
-    const prevOutputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE;
-    const prevOrder = process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;
-    const prevReranker = process.env.BONFIRES_HYPERMEM_RERANKER;
+  it("hypermem arm consumes server-filtered linked evidence", async () => {
+    const prevOutputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
+    const prevOrder = process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+    const prevReranker = process.env.BONFIRES_HYPERMEM_RERANKER
     try {
-      process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = "011";
-      delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;
-      process.env.BONFIRES_HYPERMEM_RERANKER = "0";
+      process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = "011"
+      delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+      process.env.BONFIRES_HYPERMEM_RERANKER = "0"
       const client = {
         hypermemSearch: mock(async () => ({
           facts: [
-            {
-              score: 0.3,
-              data: {
-                source_type: "entity_linkage",
-                content:
-                  "Within Recreational Activities, Running, Caroline, and Melanie are semantically linked: Recreational Activities: Caroline asks if the purple item is for walking or running.",
-              },
-            },
             {
               score: 0.2,
               data: {
                 source_type: "entity_linkage",
                 content:
-                  "Within Recreational Activities, camping trip and Melanie are semantically linked: Recreational Activities: Melanie and her family went camping.",
+                  "Within Recreational Activities, candidate linked items: camping trip. Evidence: Recreational Activities: Melanie and her family went camping.",
               },
             },
           ],
         })),
-      };
+      }
       const out = await armSearch({
         client: client as unknown as Parameters<typeof armSearch>[0]["client"],
         query: "What activities does Melanie partake in?",
         config: { ...baseCfg, arm: "hypermem" },
-      });
+      })
       expect(out.map((hit) => hit.text)).toEqual([
         "[FACT] Within Recreational Activities, candidate linked items: camping trip. Evidence: Recreational Activities: Melanie and her family went camping.",
-      ]);
+      ])
     } finally {
-      if (prevOutputType === undefined) delete process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE;
-      else process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = prevOutputType;
-      if (prevOrder === undefined) delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;
-      else process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = prevOrder;
-      if (prevReranker === undefined) delete process.env.BONFIRES_HYPERMEM_RERANKER;
-      else process.env.BONFIRES_HYPERMEM_RERANKER = prevReranker;
+      if (prevOutputType === undefined) delete process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
+      else process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = prevOutputType
+      if (prevOrder === undefined) delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+      else process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = prevOrder
+      if (prevReranker === undefined) delete process.env.BONFIRES_HYPERMEM_RERANKER
+      else process.env.BONFIRES_HYPERMEM_RERANKER = prevReranker
     }
-  });
+  })
 
-  it("hypermem arm keeps linked evidence when a short query name prefixes a full actor name", async () => {
-    const prevOutputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE;
-    const prevOrder = process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;
-    const prevReranker = process.env.BONFIRES_HYPERMEM_RERANKER;
+  it("hypermem arm preserves server-linked evidence for compatible short names", async () => {
+    const prevOutputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
+    const prevOrder = process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+    const prevReranker = process.env.BONFIRES_HYPERMEM_RERANKER
     try {
-      process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = "011";
-      delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;
-      process.env.BONFIRES_HYPERMEM_RERANKER = "0";
+      process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = "011"
+      delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+      process.env.BONFIRES_HYPERMEM_RERANKER = "0"
       const client = {
         hypermemSearch: mock(async () => ({
           facts: [
@@ -450,118 +660,109 @@ describe("armSearch", () => {
               data: {
                 source_type: "entity_linkage",
                 content:
-                  "Within Symbolic Objects, clay sculptures, Melanie, and Caroline are semantically linked: Melanie shared a photo of a cup with a dog face on it.",
+                  "Within Symbolic Objects, candidate linked items: clay sculptures. Evidence: Melanie shared a photo of a cup with a dog face on it.",
               },
             },
           ],
         })),
-      };
+      }
       const out = await armSearch({
         client: client as unknown as Parameters<typeof armSearch>[0]["client"],
         query: "What kind of pot did Mel and her kids make with clay?",
         config: { ...baseCfg, arm: "hypermem" },
-      });
+      })
       expect(out.map((hit) => hit.text)).toEqual([
         "[FACT] Within Symbolic Objects, candidate linked items: clay sculptures. Evidence: Melanie shared a photo of a cup with a dog face on it.",
-      ]);
+      ])
     } finally {
-      if (prevOutputType === undefined) delete process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE;
-      else process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = prevOutputType;
-      if (prevOrder === undefined) delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;
-      else process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = prevOrder;
-      if (prevReranker === undefined) delete process.env.BONFIRES_HYPERMEM_RERANKER;
-      else process.env.BONFIRES_HYPERMEM_RERANKER = prevReranker;
+      if (prevOutputType === undefined) delete process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
+      else process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = prevOutputType
+      if (prevOrder === undefined) delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+      else process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = prevOrder
+      if (prevReranker === undefined) delete process.env.BONFIRES_HYPERMEM_RERANKER
+      else process.env.BONFIRES_HYPERMEM_RERANKER = prevReranker
     }
-  });
+  })
 
-  it("hypermem arm drops rendered candidate evidence when the evidence body has a different actor", async () => {
-    const prevOutputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE;
-    const prevOrder = process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;
-    const prevReranker = process.env.BONFIRES_HYPERMEM_RERANKER;
+  it("hypermem arm consumes server-filtered candidate evidence", async () => {
+    const prevOutputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
+    const prevOrder = process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+    const prevReranker = process.env.BONFIRES_HYPERMEM_RERANKER
     try {
-      process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = "011";
-      delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;
-      process.env.BONFIRES_HYPERMEM_RERANKER = "0";
+      process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = "011"
+      delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+      process.env.BONFIRES_HYPERMEM_RERANKER = "0"
       const client = {
         hypermemSearch: mock(async () => ({
           facts: [
-            {
-              score: 0.3,
-              data: {
-                source_type: "entity_linkage",
-                content:
-                  "Within Recreational Activities, beach experience and Melanie are semantically linked: Recreational Activities: Caroline went hiking last week.",
-              },
-            },
             {
               score: 0.2,
               data: {
                 source_type: "entity_linkage",
                 content:
-                  "Within Recreational Activities, pottery workshop and Melanie are semantically linked: Recreational Activities: Melanie found the pottery workshop relaxing.",
+                  "Within Recreational Activities, candidate linked items: pottery workshop. Evidence: Recreational Activities: Melanie found the pottery workshop relaxing.",
               },
             },
           ],
         })),
-      };
+      }
       const out = await armSearch({
         client: client as unknown as Parameters<typeof armSearch>[0]["client"],
         query: "What activities does Melanie partake in?",
         config: { ...baseCfg, arm: "hypermem" },
-      });
+      })
       expect(out.map((hit) => hit.text)).toEqual([
         "[FACT] Within Recreational Activities, candidate linked items: pottery workshop. Evidence: Recreational Activities: Melanie found the pottery workshop relaxing.",
-      ]);
+      ])
     } finally {
-      if (prevOutputType === undefined) delete process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE;
-      else process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = prevOutputType;
-      if (prevOrder === undefined) delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;
-      else process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = prevOrder;
-      if (prevReranker === undefined) delete process.env.BONFIRES_HYPERMEM_RERANKER;
-      else process.env.BONFIRES_HYPERMEM_RERANKER = prevReranker;
+      if (prevOutputType === undefined) delete process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
+      else process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = prevOutputType
+      if (prevOrder === undefined) delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+      else process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = prevOrder
+      if (prevReranker === undefined) delete process.env.BONFIRES_HYPERMEM_RERANKER
+      else process.env.BONFIRES_HYPERMEM_RERANKER = prevReranker
     }
-  });
+  })
 
-  it("hypermem arm filters supplemental evidence without non-name query overlap", async () => {
-    const prevOutputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE;
-    const prevOrder = process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;
-    const prevReranker = process.env.BONFIRES_HYPERMEM_RERANKER;
+  it("hypermem arm consumes server-filtered supplemental evidence", async () => {
+    const prevOutputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
+    const prevOrder = process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+    const prevReranker = process.env.BONFIRES_HYPERMEM_RERANKER
     try {
-      process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = "011";
-      delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;
-      process.env.BONFIRES_HYPERMEM_RERANKER = "0";
+      process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = "011"
+      delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+      process.env.BONFIRES_HYPERMEM_RERANKER = "0"
       const client = {
         hypermemSearch: mock(async () => ({
-          evidence: [
-            { score: 0.8, data: { content: "Melanie wants to do a family outing this summer." } },
-            { score: 0.7, data: { content: "Melanie described the roadtrip as scary." } },
-          ],
+          evidence: [{ score: 0.7, data: { content: "Melanie described the roadtrip as scary." } }],
         })),
-      };
+      }
       const out = await armSearch({
         client: client as unknown as Parameters<typeof armSearch>[0]["client"],
         query: "Would Melanie go on another roadtrip soon?",
         config: { ...baseCfg, arm: "hypermem" },
-      });
-      expect(out.map((hit) => hit.text)).toEqual(["[EVIDENCE] Melanie described the roadtrip as scary."]);
+      })
+      expect(out.map((hit) => hit.text)).toEqual([
+        "[EVIDENCE] Melanie described the roadtrip as scary.",
+      ])
     } finally {
-      if (prevOutputType === undefined) delete process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE;
-      else process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = prevOutputType;
-      if (prevOrder === undefined) delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;
-      else process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = prevOrder;
-      if (prevReranker === undefined) delete process.env.BONFIRES_HYPERMEM_RERANKER;
-      else process.env.BONFIRES_HYPERMEM_RERANKER = prevReranker;
+      if (prevOutputType === undefined) delete process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
+      else process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = prevOutputType
+      if (prevOrder === undefined) delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+      else process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = prevOrder
+      if (prevReranker === undefined) delete process.env.BONFIRES_HYPERMEM_RERANKER
+      else process.env.BONFIRES_HYPERMEM_RERANKER = prevReranker
     }
-  });
+  })
 
-  it("hypermem arm renders procedural action targets for what-did verb questions", async () => {
-    const prevOutputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE;
-    const prevOrder = process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;
-    const prevReranker = process.env.BONFIRES_HYPERMEM_RERANKER;
+  it("hypermem arm preserves full action evidence for what-did verb questions", async () => {
+    const prevOutputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
+    const prevOrder = process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+    const prevReranker = process.env.BONFIRES_HYPERMEM_RERANKER
     try {
-      process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = "011";
-      delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;
-      process.env.BONFIRES_HYPERMEM_RERANKER = "0";
+      process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = "011"
+      delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+      process.env.BONFIRES_HYPERMEM_RERANKER = "0"
       const client = {
         hypermemSearch: mock(async () => ({
           facts: [
@@ -575,33 +776,33 @@ describe("armSearch", () => {
             },
           ],
         })),
-      };
+      }
       const out = await armSearch({
         client: client as unknown as Parameters<typeof armSearch>[0]["client"],
         query: "What did Caroline research?",
         config: { ...baseCfg, arm: "hypermem" },
-      });
+      })
       expect(out[0].text).toBe(
-        "[FACT] Action target for research: adoption agency. Evidence: Caroline advises to do research and find an adoption agency or lawyer for help with the adoption process."
-      );
+        "[FACT] Caroline advises to do research and find an adoption agency or lawyer for help with the adoption process."
+      )
     } finally {
-      if (prevOutputType === undefined) delete process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE;
-      else process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = prevOutputType;
-      if (prevOrder === undefined) delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;
-      else process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = prevOrder;
-      if (prevReranker === undefined) delete process.env.BONFIRES_HYPERMEM_RERANKER;
-      else process.env.BONFIRES_HYPERMEM_RERANKER = prevReranker;
+      if (prevOutputType === undefined) delete process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
+      else process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = prevOutputType
+      if (prevOrder === undefined) delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+      else process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = prevOrder
+      if (prevReranker === undefined) delete process.env.BONFIRES_HYPERMEM_RERANKER
+      else process.env.BONFIRES_HYPERMEM_RERANKER = prevReranker
     }
-  });
+  })
 
-  it("hypermem arm filters action-target facts about a different named actor", async () => {
-    const prevOutputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE;
-    const prevOrder = process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;
-    const prevReranker = process.env.BONFIRES_HYPERMEM_RERANKER;
+  it("hypermem arm consumes server-filtered action-target facts", async () => {
+    const prevOutputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
+    const prevOrder = process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+    const prevReranker = process.env.BONFIRES_HYPERMEM_RERANKER
     try {
-      process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = "011";
-      delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;
-      process.env.BONFIRES_HYPERMEM_RERANKER = "0";
+      process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = "011"
+      delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+      process.env.BONFIRES_HYPERMEM_RERANKER = "0"
       const client = {
         hypermemSearch: mock(async () => ({
           facts: [
@@ -613,53 +814,38 @@ describe("armSearch", () => {
                   "Caroline advises to do research and find an adoption agency or lawyer for help with the adoption process.",
               },
             },
-            {
-              score: 0.2,
-              data: {
-                source_type: "statement",
-                content: "Melanie acknowledged that doing research and readying herself emotionally makes sense.",
-              },
-            },
           ],
         })),
-      };
+      }
       const out = await armSearch({
         client: client as unknown as Parameters<typeof armSearch>[0]["client"],
         query: "What did Caroline research?",
         config: { ...baseCfg, arm: "hypermem" },
-      });
+      })
       expect(out.map((hit) => hit.text)).toEqual([
-        "[FACT] Action target for research: adoption agency. Evidence: Caroline advises to do research and find an adoption agency or lawyer for help with the adoption process.",
-      ]);
+        "[FACT] Caroline advises to do research and find an adoption agency or lawyer for help with the adoption process.",
+      ])
     } finally {
-      if (prevOutputType === undefined) delete process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE;
-      else process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = prevOutputType;
-      if (prevOrder === undefined) delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;
-      else process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = prevOrder;
-      if (prevReranker === undefined) delete process.env.BONFIRES_HYPERMEM_RERANKER;
-      else process.env.BONFIRES_HYPERMEM_RERANKER = prevReranker;
+      if (prevOutputType === undefined) delete process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
+      else process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = prevOutputType
+      if (prevOrder === undefined) delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+      else process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = prevOrder
+      if (prevReranker === undefined) delete process.env.BONFIRES_HYPERMEM_RERANKER
+      else process.env.BONFIRES_HYPERMEM_RERANKER = prevReranker
     }
-  });
+  })
 
-  it("hypermem arm ignores linked-action clauses when the query actor is only in the linkage lead", async () => {
-    const prevOutputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE;
-    const prevOrder = process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;
-    const prevReranker = process.env.BONFIRES_HYPERMEM_RERANKER;
+  it("hypermem arm consumes server-filtered linked-action clauses", async () => {
+    const prevOutputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
+    const prevOrder = process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+    const prevReranker = process.env.BONFIRES_HYPERMEM_RERANKER
     try {
-      process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = "011";
-      delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;
-      process.env.BONFIRES_HYPERMEM_RERANKER = "0";
+      process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = "011"
+      delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+      process.env.BONFIRES_HYPERMEM_RERANKER = "0"
       const client = {
         hypermemSearch: mock(async () => ({
           facts: [
-            {
-              score: 0.3,
-              data: {
-                source_type: "entity_linkage",
-                content:
-                  "Within Creative Expression, Melanie and Caroline are semantically linked: Melanie planned to do research and ready herself emotionally.",
-              },
-            },
             {
               score: 0.2,
               data: {
@@ -670,33 +856,33 @@ describe("armSearch", () => {
             },
           ],
         })),
-      };
+      }
       const out = await armSearch({
         client: client as unknown as Parameters<typeof armSearch>[0]["client"],
         query: "What did Caroline research?",
         config: { ...baseCfg, arm: "hypermem" },
-      });
+      })
       expect(out.map((hit) => hit.text)).toEqual([
-        "[FACT] Action target for research: adoption agency. Evidence: Caroline advises to do research and find an adoption agency or lawyer for help with the adoption process.",
-      ]);
+        "[FACT] Caroline advises to do research and find an adoption agency or lawyer for help with the adoption process.",
+      ])
     } finally {
-      if (prevOutputType === undefined) delete process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE;
-      else process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = prevOutputType;
-      if (prevOrder === undefined) delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;
-      else process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = prevOrder;
-      if (prevReranker === undefined) delete process.env.BONFIRES_HYPERMEM_RERANKER;
-      else process.env.BONFIRES_HYPERMEM_RERANKER = prevReranker;
+      if (prevOutputType === undefined) delete process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
+      else process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = prevOutputType
+      if (prevOrder === undefined) delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+      else process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = prevOrder
+      if (prevReranker === undefined) delete process.env.BONFIRES_HYPERMEM_RERANKER
+      else process.env.BONFIRES_HYPERMEM_RERANKER = prevReranker
     }
-  });
+  })
 
-  it("hypermem arm preserves score order for rendered action targets and generic action facts", async () => {
-    const prevOutputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE;
-    const prevOrder = process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;
-    const prevReranker = process.env.BONFIRES_HYPERMEM_RERANKER;
+  it("hypermem arm preserves score order for action facts", async () => {
+    const prevOutputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
+    const prevOrder = process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+    const prevReranker = process.env.BONFIRES_HYPERMEM_RERANKER
     try {
-      process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = "011";
-      delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;
-      process.env.BONFIRES_HYPERMEM_RERANKER = "0";
+      process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = "011"
+      delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+      process.env.BONFIRES_HYPERMEM_RERANKER = "0"
       const client = {
         hypermemSearch: mock(async () => ({
           facts: [
@@ -717,24 +903,23 @@ describe("armSearch", () => {
             },
           ],
         })),
-      };
+      }
       const out = await armSearch({
         client: client as unknown as Parameters<typeof armSearch>[0]["client"],
         query: "What did Caroline research?",
         config: { ...baseCfg, arm: "hypermem" },
-      });
+      })
       expect(out.map((hit) => hit.text)).toEqual([
         "[FACT] Caroline plans to go do some research.",
-        "[FACT] Action target for research: adoption agency. Evidence: Caroline advises to do research and find an adoption agency or lawyer for help with the adoption process.",
-      ]);
+        "[FACT] Caroline advises to do research and find an adoption agency or lawyer for help with the adoption process.",
+      ])
     } finally {
-      if (prevOutputType === undefined) delete process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE;
-      else process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = prevOutputType;
-      if (prevOrder === undefined) delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER;
-      else process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = prevOrder;
-      if (prevReranker === undefined) delete process.env.BONFIRES_HYPERMEM_RERANKER;
-      else process.env.BONFIRES_HYPERMEM_RERANKER = prevReranker;
+      if (prevOutputType === undefined) delete process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
+      else process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = prevOutputType
+      if (prevOrder === undefined) delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+      else process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = prevOrder
+      if (prevReranker === undefined) delete process.env.BONFIRES_HYPERMEM_RERANKER
+      else process.env.BONFIRES_HYPERMEM_RERANKER = prevReranker
     }
-  });
-
-});
+  })
+})
