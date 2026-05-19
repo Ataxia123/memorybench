@@ -155,6 +155,7 @@ export interface HyperMemSearchResult {
   episodes?: Array<{ score?: number | null; data?: Record<string, unknown> }>
   facts?: Array<{ score?: number | null; source?: string; data?: Record<string, unknown> }>
   evidence?: Array<{ score?: number | null; source?: string; data?: Record<string, unknown> }>
+  diagnostics?: Record<string, unknown>
 }
 
 export type BonfiresArm =

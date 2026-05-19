@@ -100,6 +100,52 @@ function renderHypermemHitText(prefix: string, content: string, temporal: unknow
   return humanizeDatesInText(`${prefix} ${cleanContent} (event_time: ${temporalText})`)
 }
 
+function slimHypermemDiagnostics(diagnostics: Record<string, unknown> | undefined): Record<string, unknown> {
+  if (!diagnostics || process.env.BONFIRES_HYPERMEM_DIAGNOSTICS !== "1") return {}
+  const scalarKeys = [
+    "latency_ms",
+    "graph_hydration_ms",
+    "graph_hydration_rows_fetched",
+    "graph_episode_fetch_ms",
+    "graph_node_search_ms",
+    "graph_node_search_candidate_count",
+    "graph_score_dedupe_ms",
+    "graph_hydration_wait_ms",
+    "graph_hydration_concurrency_limit",
+    "context_token_count",
+    "connected_episode_count",
+    "routed_episode_count",
+    "connected_fact_count",
+    "routed_fact_count",
+    "source_sibling_episode_count",
+    "source_sibling_fact_route_count",
+    "rerank_applied",
+    "late_rerank_applied",
+  ]
+  const out: Record<string, unknown> = {}
+  for (const key of scalarKeys) {
+    const value = diagnostics[key]
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      out[key] = value
+    }
+  }
+  for (const key of [
+    "latency_breakdown_ms",
+    "process_memory",
+    "retrieval_index_stats",
+    "hypermem_cache",
+    "fact_source_type_mix",
+    "graph_hydration_anchor_counts",
+    "graph_hydration_limits",
+  ]) {
+    const value = diagnostics[key]
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      out[key] = value
+    }
+  }
+  return out
+}
+
 const HYPERMEM_METADATA_SCALAR_KEYS = [
   "id",
   "topic_id",
@@ -179,9 +225,10 @@ export async function armSearch(args: {
           ),
           topicTopK: parseInt(process.env.BONFIRES_HYPERMEM_TOPIC_TOP_K ?? "4", 10),
           episodeTopK: parseInt(process.env.BONFIRES_HYPERMEM_EPISODE_TOP_K ?? "6", 10),
-          factTopK: parseInt(process.env.BONFIRES_HYPERMEM_FACT_TOP_K ?? "10", 10),
+          factTopK: parseInt(process.env.BONFIRES_HYPERMEM_FACT_TOP_K ?? "30", 10),
           outputType,
           useReranker: process.env.BONFIRES_HYPERMEM_RERANKER !== "0",
+          useLateReranker: process.env.BONFIRES_HYPERMEM_LATE_RERANKER === "1",
         })
         const facts = (r.facts ?? [])
           .map((fact) => {
@@ -256,6 +303,16 @@ export async function armSearch(args: {
             },
           }))
         const ordered = orderedHypermemHits(outputType, { topics, episodes, facts, evidence })
+        const diagnostics = slimHypermemDiagnostics(r.diagnostics)
+        if (Object.keys(diagnostics).length > 0 && ordered[0]) {
+          ordered[0] = {
+            ...ordered[0],
+            metadata: {
+              ...(ordered[0].metadata ?? {}),
+              hypermem_diagnostics: diagnostics,
+            },
+          }
+        }
         return ordered
       }
       case "smart_chunks_only": {
