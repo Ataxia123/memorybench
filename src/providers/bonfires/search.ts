@@ -118,6 +118,8 @@ function slimHypermemDiagnostics(diagnostics: Record<string, unknown> | undefine
     "connected_fact_count",
     "routed_fact_count",
     "global_location_answer_candidate_count",
+    "global_visual_quantity_candidate_count",
+    "global_reaction_answer_candidate_count",
     "source_sibling_episode_count",
     "source_sibling_fact_route_count",
     "rerank_applied",
