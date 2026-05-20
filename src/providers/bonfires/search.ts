@@ -108,6 +108,7 @@ function slimHypermemDiagnostics(diagnostics: Record<string, unknown> | undefine
     "graph_hydration_rows_fetched",
     "graph_episode_fetch_ms",
     "graph_node_search_ms",
+    "graph_edge_search_ms",
     "graph_node_search_candidate_count",
     "graph_score_dedupe_ms",
     "graph_hydration_wait_ms",
