@@ -204,9 +204,9 @@ describe("armSearch", () => {
       })
       expect(out.map((h) => h.text)).toEqual([
         "[FACT] Direct fact one",
-        "[EVIDENCE] Graph evidence one",
+        "[FACT] Graph evidence one",
         "[FACT] Direct fact two",
-        "[EVIDENCE] Graph evidence two",
+        "[FACT] Graph evidence two",
         "[EPISODE] Episode summary",
       ])
     } finally {
@@ -262,7 +262,7 @@ describe("armSearch", () => {
       })
       expect(out.map((h) => h.text)).toEqual([
         "[FACT] Direct fact one [occurred 15 July 2023]",
-        "[EVIDENCE] Returned graph fact [occurred 16 July 2023]",
+        "[FACT] Returned graph fact [occurred 16 July 2023]",
       ])
     } finally {
       if (prevOutputType === undefined) delete process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
@@ -458,7 +458,7 @@ describe("armSearch", () => {
         "bundle"
       )
       expect(out[1].text).toBe(
-        "[EVIDENCE] Melanie enjoys hiking in the mountains. [occurred 15 July 2023]"
+        "[FACT] Melanie enjoys hiking in the mountains. [occurred 15 July 2023]"
       )
     } finally {
       if (prevOutputType === undefined) delete process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
@@ -511,7 +511,7 @@ describe("armSearch", () => {
         config: { ...baseCfg, arm: "hypermem" },
       })
       expect(out[0].text).toBe(
-        "[EVIDENCE] Melanie and her kids made a cup with a dog face on it using clay."
+        "[FACT] Melanie and her kids made a cup with a dog face on it using clay."
       )
       expect(out.some((hit) => hit.kind === "fact" && hit.text.includes("celebration"))).toBe(false)
     } finally {
@@ -743,7 +743,7 @@ describe("armSearch", () => {
         config: { ...baseCfg, arm: "hypermem" },
       })
       expect(out.map((hit) => hit.text)).toEqual([
-        "[EVIDENCE] Melanie described the roadtrip as scary.",
+        "[FACT] Melanie described the roadtrip as scary.",
       ])
     } finally {
       if (prevOutputType === undefined) delete process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE

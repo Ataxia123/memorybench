@@ -117,6 +117,7 @@ function slimHypermemDiagnostics(diagnostics: Record<string, unknown> | undefine
     "routed_episode_count",
     "connected_fact_count",
     "routed_fact_count",
+    "global_location_answer_candidate_count",
     "source_sibling_episode_count",
     "source_sibling_fact_route_count",
     "rerank_applied",
@@ -294,7 +295,7 @@ export async function armSearch(args: {
           })
           .filter((item) => item.content)
           .map(({ item, content, timestamp }) => ({
-            text: renderHypermemHitText("[EVIDENCE]", content, timestamp),
+            text: renderHypermemHitText("[FACT]", content, timestamp),
             score: item.score ?? null,
             kind: "fact" as const,
             metadata: {

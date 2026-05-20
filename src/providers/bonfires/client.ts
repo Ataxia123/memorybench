@@ -835,6 +835,7 @@ export class BonfiresClient {
     factTopK?: number
     outputType?: string
     useReranker?: boolean
+    useLateReranker?: boolean
   }): Promise<HyperMemSearchResult> {
     return this.req<HyperMemSearchResult>("POST", "/search/hypermem", {
       bonfire_id: args.bonfireId,
@@ -844,10 +845,11 @@ export class BonfiresClient {
         initial_candidates: args.initialCandidates ?? 100,
         topic_top_k: args.topicTopK ?? 4,
         episode_top_k: args.episodeTopK ?? 6,
-        fact_top_k: args.factTopK ?? 10,
+        fact_top_k: args.factTopK ?? 30,
         retrieval_type: "rrf",
         output_type: args.outputType ?? "111",
         use_reranker: args.useReranker ?? true,
+        use_late_reranker: args.useLateReranker ?? false,
       },
     })
   }
@@ -875,7 +877,7 @@ export class BonfiresClient {
         initial_candidates: args.initialCandidates ?? 100,
         topic_top_k: args.topicTopK ?? 4,
         episode_top_k: args.episodeTopK ?? 6,
-        fact_top_k: args.factTopK ?? 10,
+        fact_top_k: args.factTopK ?? 30,
         retrieval_type: "rrf",
         output_type: args.outputType ?? "111",
         use_reranker: args.useReranker ?? true,

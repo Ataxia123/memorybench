@@ -16,10 +16,12 @@ describe("Bonfires extractive prompt", () => {
         : ""
 
     expect(prompt).toContain("ranked by relevance")
-    expect(prompt).toContain("distinct candidate")
+    expect(prompt).toContain("distinct supported candidates")
     expect(prompt).toContain("resolved relative time")
     expect(prompt).toContain("copy")
     expect(prompt).toContain("exact phrase")
+    expect(prompt).toContain("modal or likelihood questions")
+    expect(prompt).toContain("strongest ranked behavioral")
   })
 
   test("provides a Zep-style lenient LoCoMo judge prompt for comparable runs", () => {

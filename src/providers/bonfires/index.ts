@@ -142,18 +142,24 @@ Question: ${question}
 
 Rules:
 1. Return the shortest exact answer supported by the context. No explanation.
-2. Use ranked context order when evidence conflicts; earlier items win.
+2. For list or set questions, scan all relevant FACT/claim lines and return
+   the union of distinct supported candidates. Do not stop at the first
+   matching line. Use ranked context order only to resolve direct conflicts,
+   not to drop additional compatible items.
 3. Prefer exact FACT/claim wording over broad entity or episode summaries.
 4. Ignore answer_hint lines unless there is no factual evidence.
-5. For list questions, include every distinct candidate present in the
-   context, separated by commas. Do not collapse multiple candidates into
-   one broad category.
+5. For list questions, separate candidates with commas. Do not collapse
+   multiple candidates into one broad category.
 6. For date questions, use any "[resolved relative time: ...]" annotation
    before raw words like "yesterday", "last week", or "this month".
 7. For specific objects, titles, signs, names, places, identities, statuses,
    or emotions, copy
    the exact phrase from the context when present.
-8. If the context contains no relevant evidence at all, answer exactly:
+8. For modal or likelihood questions using words like "would", "likely",
+   "considered", or "might", infer the shortest supported answer from the
+   strongest ranked behavioral, status, identity, or event evidence. Do not
+   require the context to contain the exact yes/no wording from the question.
+9. If the context contains no relevant evidence at all, answer exactly:
    I don't know
 
 Answer:`
