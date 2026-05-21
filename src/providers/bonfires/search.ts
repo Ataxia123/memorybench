@@ -104,12 +104,21 @@ function slimHypermemDiagnostics(diagnostics: Record<string, unknown> | undefine
   if (!diagnostics || process.env.BONFIRES_HYPERMEM_DIAGNOSTICS !== "1") return {}
   const scalarKeys = [
     "latency_ms",
+    "route_total_latency_ms",
+    "hypermem_load_ms",
+    "query_embedding_ms",
+    "query_vector_origin",
     "graph_hydration_ms",
     "graph_hydration_rows_fetched",
     "graph_episode_fetch_ms",
     "graph_node_search_ms",
+    "graph_node_search_timed_out",
     "graph_edge_search_ms",
+    "graph_edge_search_timed_out",
     "graph_node_search_candidate_count",
+    "graph_anchor_search_candidate_count",
+    "graph_anchor_search_wait_ms",
+    "graph_anchor_search_concurrency_limit",
     "graph_score_dedupe_ms",
     "graph_hydration_wait_ms",
     "graph_hydration_concurrency_limit",
@@ -141,6 +150,9 @@ function slimHypermemDiagnostics(diagnostics: Record<string, unknown> | undefine
     "fact_source_type_mix",
     "graph_hydration_anchor_counts",
     "graph_hydration_limits",
+    "graph_post_hydration_timings_ms",
+    "query_embedder_delta",
+    "query_embedder_stats",
   ]) {
     const value = diagnostics[key]
     if (value && typeof value === "object" && !Array.isArray(value)) {
@@ -166,6 +178,16 @@ const HYPERMEM_METADATA_SCALAR_KEYS = [
   "subject",
   "title",
   "episode_detail_kind",
+  "source_observation_anchor",
+  "source_observation_anchor_distance",
+  "source_observation_anchor_query_overlap",
+  "source_observation_anchor_structural_overlap",
+  "source_observation_backward_reference_score",
+  "finalization_merged_count",
+  "finalization_capped_count",
+  "finalization_ranking_input_count",
+  "finalization_ranked_count",
+  "finalization_prepared_count",
 ] as const
 
 const HYPERMEM_METADATA_LIST_KEYS = [
@@ -177,6 +199,7 @@ const HYPERMEM_METADATA_LIST_KEYS = [
   "participants",
   "user_ids",
   "topic_route",
+  "source_observation_details",
 ] as const
 
 function slimHypermemMetadata(data: Record<string, unknown> | undefined): Record<string, unknown> {

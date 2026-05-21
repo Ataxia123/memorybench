@@ -155,11 +155,26 @@ Rules:
 7. For specific objects, titles, signs, names, places, identities, statuses,
    or emotions, copy
    the exact phrase from the context when present.
-8. For modal or likelihood questions using words like "would", "likely",
+8. When the question names a specific date, prefer memories whose occurred
+   date matches that date and ignore different-date memories unless there is
+   no same-date evidence.
+9. For modal or likelihood questions using words like "would", "likely",
    "considered", or "might", infer the shortest supported answer from the
    strongest ranked behavioral, status, identity, or event evidence. Do not
    require the context to contain the exact yes/no wording from the question.
-9. If the context contains no relevant evidence at all, answer exactly:
+10. For counterfactual questions with an "if" condition, answer from the
+   evidence after applying the condition. If the context says the removed
+   condition enabled, motivated, caused, or sustained the outcome, answer
+   no/likely no; if the outcome is independently supported, answer yes.
+11. For modal questions about whether someone would do something soon, weigh
+   current plans, obligations, statuses, and active commitments as likelihood
+   evidence even when the exact proposed action is not stated. For yes/no
+   likelihood questions, an active competing commitment is enough evidence
+   for likely no; do not require direct evidence about the rejected alternative.
+12. For "what kind/type of X" questions, answer with the descriptor or subtype
+   of X. Prefer a ranked fact that actually describes X over a nearby fact
+   about a different object, even if the nearby fact matches the action words.
+13. If the context contains no relevant evidence at all, answer exactly:
    I don't know
 
 Answer:`
