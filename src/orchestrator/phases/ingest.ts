@@ -6,7 +6,7 @@ import { logger } from "../../utils/logger"
 import { ConcurrentExecutor } from "../concurrent"
 import { resolveConcurrency } from "../../types/concurrency"
 
-const RATE_LIMIT_MS = 1000
+const DEFAULT_RATE_LIMIT_MS = 1000
 
 export async function runIngestPhase(
   provider: Provider,
@@ -31,13 +31,16 @@ export async function runIngestPhase(
   }
 
   const concurrency = resolveConcurrency("ingest", checkpoint.concurrency, provider.concurrency)
+  const rateLimitMs = ingestRateLimitMs()
 
-  logger.info(`Ingesting ${pendingQuestions.length} questions (concurrency: ${concurrency})...`)
+  logger.info(
+    `Ingesting ${pendingQuestions.length} questions (concurrency: ${concurrency}, rateLimitMs: ${rateLimitMs})...`
+  )
 
   await ConcurrentExecutor.executeBatched({
     items: pendingQuestions,
     concurrency,
-    rateLimitMs: RATE_LIMIT_MS,
+    rateLimitMs,
     runId: checkpoint.runId,
     phaseName: "ingest",
     executeTask: async ({ item: question, index, total }) => {
@@ -124,4 +127,16 @@ export async function runIngestPhase(
   })
 
   logger.success("Ingest phase complete")
+}
+
+function ingestRateLimitMs(): number {
+  const raw = process.env.MEMORYBENCH_INGEST_RATE_LIMIT_MS
+  if (raw === undefined || raw.trim() === "") {
+    return DEFAULT_RATE_LIMIT_MS
+  }
+  const parsed = Number.parseInt(raw, 10)
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_RATE_LIMIT_MS
+  }
+  return Math.max(0, parsed)
 }
