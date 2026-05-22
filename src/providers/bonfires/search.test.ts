@@ -325,6 +325,149 @@ describe("armSearch", () => {
     }
   })
 
+  it("hypermem arm preserves compact construction grammar diagnostics", async () => {
+    const prevOutputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
+    const prevOrder = process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+    const prevReranker = process.env.BONFIRES_HYPERMEM_RERANKER
+    const prevDiagnostics = process.env.BONFIRES_HYPERMEM_DIAGNOSTICS
+    try {
+      process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = "001"
+      process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = "score"
+      process.env.BONFIRES_HYPERMEM_RERANKER = "0"
+      process.env.BONFIRES_HYPERMEM_DIAGNOSTICS = "1"
+      const client = {
+        hypermemSearch: mock(async () => ({
+          diagnostics: {
+            construction_grammar: {
+              matched_recipes: [{ recipe_kind: "TEMPORAL_ROLE_BOUND_EVENT" }],
+              top_evidence_ids: ["fact-1"],
+            },
+          },
+          facts: [
+            {
+              score: 0.8,
+              source: "global_temporal_action_date",
+              data: {
+                source_type: "temporal_answer",
+                event_count: 2,
+                event_subject: "Alice",
+                event_action: "planned",
+                event_object: "coffee",
+                content: "Alice planned coffee on Friday.",
+                metadata: {
+                  grammar_query_plan: [
+                    {
+                      recipe_kind: "TEMPORAL_ROLE_BOUND_EVENT",
+                      matched: true,
+                      trace_id: "trace-1",
+                      bound_slots: { temporal_cues: ["when"], ignored: [{ nested: true }] },
+                    },
+                  ],
+                  consumed_artifacts: [
+                    {
+                      kind: "temporal_edge",
+                      artifact_family: "TemporalRoleBoundEvent",
+                      signature: "temporal|friday",
+                      trace_id: "artifact-trace-1",
+                      statement_ids: ["stmt-1"],
+                      source_fact_ids: ["fact-1"],
+                      episode_ids: ["episode-1"],
+                      source_message_ids: ["message-1"],
+                      source_episode_ids: ["source-episode-1"],
+                    },
+                  ],
+                  typed_artifacts: [
+                    {
+                      kind: "construction_recipe",
+                      artifact_family: "AggregateSet",
+                      signature: "aggregate_set|alice|planned|coffee|2",
+                      trace_id: "count-trace-1",
+                      aggregate_kind: "event_count",
+                      support_count: 2,
+                      event_count: 2,
+                      event_subject: "Alice",
+                      event_action: "planned",
+                      event_object: "coffee",
+                      source_fact_ids: ["fact-1", "fact-2"],
+                    },
+                    {
+                      kind: "event_projection",
+                      artifact_family: "EventProjection",
+                      signature: "projection|alice|planned",
+                    },
+                  ],
+                },
+              },
+            },
+          ],
+        })),
+      }
+      const out = await armSearch({
+        client: client as unknown as Parameters<typeof armSearch>[0]["client"],
+        query: "When did Alice plan coffee?",
+        config: { ...baseCfg, arm: "hypermem" },
+      })
+
+      const hypermem = out[0].metadata?.hypermem as Record<string, unknown>
+      const nested = hypermem.metadata as Record<string, unknown>
+      expect(hypermem.event_count).toBe(2)
+      expect(hypermem.event_subject).toBe("Alice")
+      expect(hypermem.event_action).toBe("planned")
+      expect(hypermem.event_object).toBe("coffee")
+      expect(out[0].metadata?.hypermem_diagnostics).toEqual({
+        construction_grammar: {
+          matched_recipes: [{ recipe_kind: "TEMPORAL_ROLE_BOUND_EVENT" }],
+          top_evidence_ids: ["fact-1"],
+        },
+      })
+      expect(nested.grammar_query_plan).toEqual([
+        {
+          recipe_kind: "TEMPORAL_ROLE_BOUND_EVENT",
+          matched: true,
+          trace_id: "trace-1",
+          bound_slots: { temporal_cues: ["when"], ignored: [] },
+        },
+      ])
+      expect(nested.consumed_artifacts).toEqual([
+        {
+          kind: "temporal_edge",
+          artifact_family: "TemporalRoleBoundEvent",
+          signature: "temporal|friday",
+          trace_id: "artifact-trace-1",
+          statement_ids: ["stmt-1"],
+          source_fact_ids: ["fact-1"],
+          episode_ids: ["episode-1"],
+          source_message_ids: ["message-1"],
+          source_episode_ids: ["source-episode-1"],
+        },
+      ])
+      expect(nested.typed_artifacts).toEqual([
+        {
+          kind: "construction_recipe",
+          artifact_family: "AggregateSet",
+          signature: "aggregate_set|alice|planned|coffee|2",
+          trace_id: "count-trace-1",
+          aggregate_kind: "event_count",
+          support_count: 2,
+          event_count: 2,
+          event_subject: "Alice",
+          event_action: "planned",
+          event_object: "coffee",
+          source_fact_ids: ["fact-1", "fact-2"],
+        },
+      ])
+    } finally {
+      if (prevOutputType === undefined) delete process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
+      else process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = prevOutputType
+      if (prevOrder === undefined) delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+      else process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = prevOrder
+      if (prevReranker === undefined) delete process.env.BONFIRES_HYPERMEM_RERANKER
+      else process.env.BONFIRES_HYPERMEM_RERANKER = prevReranker
+      if (prevDiagnostics === undefined) delete process.env.BONFIRES_HYPERMEM_DIAGNOSTICS
+      else process.env.BONFIRES_HYPERMEM_DIAGNOSTICS = prevDiagnostics
+    }
+  })
+
   it("hypermem arm does not split resolved relative-time brackets inside linked aggregates", async () => {
     const prevOutputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
     const prevOrder = process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER

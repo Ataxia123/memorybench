@@ -153,6 +153,7 @@ function slimHypermemDiagnostics(diagnostics: Record<string, unknown> | undefine
     "graph_post_hydration_timings_ms",
     "query_embedder_delta",
     "query_embedder_stats",
+    "construction_grammar",
   ]) {
     const value = diagnostics[key]
     if (value && typeof value === "object" && !Array.isArray(value)) {
@@ -160,6 +161,97 @@ function slimHypermemDiagnostics(diagnostics: Record<string, unknown> | undefine
     }
   }
   return out
+}
+
+function compactGrammarTraceList(value: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
+    .slice(0, 8)
+    .map((item) => {
+      const out: Record<string, unknown> = {}
+      for (const key of ["recipe_kind", "matched", "artifact_kind", "artifact_preview", "rejection_reason", "trace_id"]) {
+        const field = item[key]
+        if (typeof field === "string" || typeof field === "number" || typeof field === "boolean") {
+          out[key] = field
+        }
+      }
+      const boundSlots = item.bound_slots
+      if (boundSlots && typeof boundSlots === "object" && !Array.isArray(boundSlots)) {
+        const slots: Record<string, unknown> = {}
+        for (const [slot, values] of Object.entries(boundSlots as Record<string, unknown>).slice(0, 8)) {
+          if (Array.isArray(values)) {
+            slots[slot] = values
+              .filter((value) => typeof value === "string" || typeof value === "number" || typeof value === "boolean")
+              .slice(0, 8)
+          }
+        }
+        if (Object.keys(slots).length > 0) out.bound_slots = slots
+      }
+      return out
+    })
+}
+
+function compactConsumedArtifactList(value: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
+    .slice(0, 8)
+    .map((item) => {
+      const out: Record<string, unknown> = {}
+      for (const key of ["kind", "artifact_family", "signature", "trace_id"]) {
+        const field = item[key]
+        if (typeof field === "string" || typeof field === "number" || typeof field === "boolean") {
+          out[key] = field
+        }
+      }
+      for (const key of ["statement_ids", "source_fact_ids", "episode_ids", "source_message_ids", "source_episode_ids"]) {
+        const field = item[key]
+        if (Array.isArray(field)) {
+          out[key] = field
+            .filter((value) => typeof value === "string" || typeof value === "number" || typeof value === "boolean")
+            .slice(0, 8)
+        }
+      }
+      return out
+    })
+}
+
+function compactTypedArtifactList(value: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
+    .filter((item) => item.artifact_family === "AggregateSet" || item.aggregate_kind === "event_count")
+    .slice(0, 8)
+    .map((item) => {
+      const out: Record<string, unknown> = {}
+      for (const key of [
+        "kind",
+        "artifact_family",
+        "signature",
+        "trace_id",
+        "aggregate_kind",
+        "support_count",
+        "event_count",
+        "event_subject",
+        "event_action",
+        "event_object",
+      ]) {
+        const field = item[key]
+        if (typeof field === "string" || typeof field === "number" || typeof field === "boolean") {
+          out[key] = field
+        }
+      }
+      for (const key of ["statement_ids", "source_fact_ids", "episode_ids", "source_message_ids", "source_episode_ids"]) {
+        const field = item[key]
+        if (Array.isArray(field)) {
+          out[key] = field
+            .filter((value) => typeof value === "string" || typeof value === "number" || typeof value === "boolean")
+            .slice(0, 8)
+        }
+      }
+      return out
+    })
 }
 
 const HYPERMEM_METADATA_SCALAR_KEYS = [
@@ -188,6 +280,12 @@ const HYPERMEM_METADATA_SCALAR_KEYS = [
   "finalization_ranking_input_count",
   "finalization_ranked_count",
   "finalization_prepared_count",
+  "event_count",
+  "event_subject",
+  "event_action",
+  "event_object",
+  "event_projection",
+  "projected_from_action",
 ] as const
 
 const HYPERMEM_METADATA_LIST_KEYS = [
@@ -221,6 +319,25 @@ function slimHypermemMetadata(data: Record<string, unknown> | undefined): Record
         )
         .slice(0, key === "keywords" ? 24 : 12)
     }
+  }
+  const metadata = data.metadata
+  if (metadata && typeof metadata === "object" && !Array.isArray(metadata)) {
+    const grammarQueryPlan = compactGrammarTraceList(
+      (metadata as Record<string, unknown>).grammar_query_plan
+    )
+    const consumedArtifacts = compactConsumedArtifactList(
+      (metadata as Record<string, unknown>).consumed_artifacts
+    )
+    const typedArtifacts = compactTypedArtifactList(
+      (metadata as Record<string, unknown>).typed_artifacts
+    )
+    const compactMetadata: Record<string, unknown> = {}
+    if (grammarQueryPlan.length > 0) compactMetadata.grammar_query_plan = grammarQueryPlan
+    if (consumedArtifacts.length > 0) compactMetadata.consumed_artifacts = consumedArtifacts
+    if (typedArtifacts.length > 0) compactMetadata.typed_artifacts = typedArtifacts
+    const artifactConsumed = (metadata as Record<string, unknown>).artifact_consumed
+    if (typeof artifactConsumed === "boolean") compactMetadata.artifact_consumed = artifactConsumed
+    if (Object.keys(compactMetadata).length > 0) out.metadata = compactMetadata
   }
   return out
 }
