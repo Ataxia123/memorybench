@@ -110,10 +110,12 @@ describe("armSearch", () => {
     const prevOutputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
     const prevOrder = process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
     const prevReranker = process.env.BONFIRES_HYPERMEM_RERANKER
+    const prevFactTopK = process.env.BONFIRES_HYPERMEM_FACT_TOP_K
     try {
-      process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = "011"
+      delete process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
       delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
       process.env.BONFIRES_HYPERMEM_RERANKER = "0"
+      delete process.env.BONFIRES_HYPERMEM_FACT_TOP_K
       const client = {
         hypermemSearch: mock(async () => ({
           topics: [{ score: 0.3, data: { title: "Topic", summary: "Topic summary" } }],
@@ -157,15 +159,53 @@ describe("armSearch", () => {
         query: "when",
         config: { ...baseCfg, arm: "hypermem" },
       })
-      expect(client.hypermemSearch.mock.calls[0][0].outputType).toBe("011")
-      expect(out.map((h) => h.kind)).toEqual(["episode", "fact", "fact", "fact", "fact"])
-      expect(out[0].text).toBe("[EPISODE] Episode summary [occurred 8 May 2023]")
-      expect(out[1].text).toBe("[FACT] Grammar fact")
-      expect(out[2].text).toBe("[FACT] Statement fact [occurred 7 May 2023]")
-      expect(out[3].text).toBe(
+      expect(client.hypermemSearch.mock.calls[0][0].outputType).toBe("111")
+      expect(client.hypermemSearch.mock.calls[0][0].factTopK).toBe(20)
+      expect(out.map((h) => h.kind)).toEqual(["community", "episode", "fact", "fact", "fact", "fact"])
+      expect(out[0].text).toBe("[TOPIC] Topic: Topic summary")
+      expect(out[1].text).toBe("[EPISODE] Episode summary [occurred 8 May 2023]")
+      expect(out[2].text).toBe("[FACT] Grammar fact")
+      expect(out[3].text).toBe("[FACT] Statement fact [occurred 7 May 2023]")
+      expect(out[4].text).toBe(
         "[FACT] Caroline went to an LGBTQ support group yesterday. [resolved relative time: yesterday = 7 May 2023; anchor: 8 May 2023]"
       )
-      expect(out[4].text).toBe("[FACT] Caroline attended an LGBTQ support group on May 7, 2023.")
+      expect(out[5].text).toBe("[FACT] Caroline attended an LGBTQ support group on May 7, 2023.")
+    } finally {
+      if (prevOutputType === undefined) delete process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
+      else process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = prevOutputType
+      if (prevOrder === undefined) delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+      else process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = prevOrder
+      if (prevReranker === undefined) delete process.env.BONFIRES_HYPERMEM_RERANKER
+      else process.env.BONFIRES_HYPERMEM_RERANKER = prevReranker
+      if (prevFactTopK === undefined) delete process.env.BONFIRES_HYPERMEM_FACT_TOP_K
+      else process.env.BONFIRES_HYPERMEM_FACT_TOP_K = prevFactTopK
+    }
+  })
+
+  it("hypermem arm preserves explicit topic-hidden output type for token tuning runs", async () => {
+    const prevOutputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
+    const prevOrder = process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+    const prevReranker = process.env.BONFIRES_HYPERMEM_RERANKER
+    try {
+      process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = "011"
+      delete process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
+      process.env.BONFIRES_HYPERMEM_RERANKER = "0"
+      const client = {
+        hypermemSearch: mock(async () => ({
+          topics: [{ score: 0.4, data: { title: "Topic", summary: "Topic summary" } }],
+          episodes: [{ score: 0.3, data: { summary: "Episode summary" } }],
+          facts: [{ score: 0.2, data: { content: "Fact content" } }],
+        })),
+      }
+
+      const out = await armSearch({
+        client: client as unknown as Parameters<typeof armSearch>[0]["client"],
+        query: "what happened",
+        config: { ...baseCfg, arm: "hypermem" },
+      })
+
+      expect(client.hypermemSearch.mock.calls[0][0].outputType).toBe("011")
+      expect(out.map((h) => h.kind)).toEqual(["episode", "fact"])
     } finally {
       if (prevOutputType === undefined) delete process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
       else process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = prevOutputType

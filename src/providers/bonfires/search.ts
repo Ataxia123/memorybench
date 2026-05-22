@@ -369,7 +369,7 @@ export async function armSearch(args: {
           ),
           topicTopK: parseInt(process.env.BONFIRES_HYPERMEM_TOPIC_TOP_K ?? "4", 10),
           episodeTopK: parseInt(process.env.BONFIRES_HYPERMEM_EPISODE_TOP_K ?? "6", 10),
-          factTopK: parseInt(process.env.BONFIRES_HYPERMEM_FACT_TOP_K ?? "30", 10),
+          factTopK: parseInt(process.env.BONFIRES_HYPERMEM_FACT_TOP_K ?? "20", 10),
           outputType,
           useReranker: process.env.BONFIRES_HYPERMEM_RERANKER !== "0",
           useLateReranker: process.env.BONFIRES_HYPERMEM_LATE_RERANKER === "1",
