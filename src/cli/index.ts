@@ -6,6 +6,7 @@ import { testQuestionCommand } from "./commands/test-question"
 import { statusCommand } from "./commands/status"
 import { listQuestionsCommand } from "./commands/list-questions"
 import { showFailuresCommand } from "./commands/show-failures"
+import { reportGateCommand } from "./commands/report-gate"
 import { serveCommand } from "./commands/serve"
 import { getAvailableProviders } from "../providers"
 import { getAvailableBenchmarks } from "../benchmarks"
@@ -25,6 +26,7 @@ Commands:
   test            Test a single question (search → answer → evaluate)
   list-questions  List all questions in a benchmark (with pagination)
   show-failures   Show failed questions from a run with full debugging data
+  report-gate     Check score and latency gates from an existing run artifact
   status          Check run status
   serve           Start the web UI server
   help            Show help (use 'help providers', 'help models', 'help benchmarks' for details)
@@ -186,6 +188,9 @@ export async function cli(args: string[]): Promise<void> {
       break
     case "show-failures":
       await showFailuresCommand(commandArgs)
+      break
+    case "report-gate":
+      await reportGateCommand(commandArgs)
       break
     case "serve":
       await serveCommand(commandArgs)

@@ -92,6 +92,12 @@ export interface QuestionTypeStats {
   retrieval?: RetrievalAggregates
 }
 
+export interface QuestionSliceStats {
+  total: number
+  correct: number
+  accuracy: number
+}
+
 export interface TokenMetrics {
   totalTokens: number
   basePromptTokens: number
@@ -126,6 +132,9 @@ export interface BenchmarkResult {
   memscore?: string
   memscoreComponents?: { quality: number; latencyMs: number; contextTokens: number }
   retrieval?: RetrievalAggregates
+  slices?: {
+    exAdversarial?: QuestionSliceStats
+  }
   byQuestionType: Record<string, QuestionTypeStats>
   questionTypeRegistry?: QuestionTypeRegistry
   evaluations: EvaluationResult[]

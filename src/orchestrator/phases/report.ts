@@ -6,6 +6,7 @@ import type {
   BenchmarkResult,
   EvaluationResult,
   LatencyStats,
+  QuestionSliceStats,
   QuestionTypeStats,
   RetrievalMetrics,
   RetrievalAggregates,
@@ -65,6 +66,21 @@ function calculateLatencyStats(durations: number[]): LatencyStats {
     p99: sorted[Math.floor(n * 0.99)] || sorted[n - 1],
     stdDev: Math.round(stdDev),
     count: n,
+  }
+}
+
+export function computeQuestionSlice(
+  evaluations: EvaluationResult[],
+  excludeTypes: string[] = ["adversarial"]
+): QuestionSliceStats {
+  const excluded = new Set(excludeTypes)
+  const slice = evaluations.filter((evaluation) => !excluded.has(evaluation.questionType))
+  const correct = slice.filter((evaluation) => evaluation.score === 1).length
+
+  return {
+    total: slice.length,
+    correct,
+    accuracy: slice.length > 0 ? correct / slice.length : 0,
   }
 }
 
@@ -199,8 +215,7 @@ export function generateReport(benchmark: Benchmark, checkpoint: RunCheckpoint):
     if (qCheckpoint.phases.evaluate.status !== "completed") continue
     const answerPhase = qCheckpoint.phases.answer
     if (answerPhase.promptTokens != null) allPromptTokens.push(answerPhase.promptTokens)
-    if (answerPhase.basePromptTokens != null)
-      allBasePromptTokens.push(answerPhase.basePromptTokens)
+    if (answerPhase.basePromptTokens != null) allBasePromptTokens.push(answerPhase.basePromptTokens)
     if (answerPhase.contextTokens != null) allContextTokens.push(answerPhase.contextTokens)
   }
 
@@ -271,6 +286,9 @@ export function generateReport(benchmark: Benchmark, checkpoint: RunCheckpoint):
     memscore,
     memscoreComponents,
     retrieval: overallRetrieval,
+    slices: {
+      exAdversarial: computeQuestionSlice(evaluations),
+    },
     byQuestionType,
     questionTypeRegistry: benchmark.getQuestionTypes(),
     evaluations,
@@ -312,6 +330,12 @@ export function printReport(result: BenchmarkResult): void {
   console.log(`  Total Questions: ${result.summary.totalQuestions}`)
   console.log(`  Correct: ${result.summary.correctCount}`)
   console.log(`  Accuracy: ${(result.summary.accuracy * 100).toFixed(2)}%`)
+  if (result.slices?.exAdversarial) {
+    const slice = result.slices.exAdversarial
+    console.log(
+      `  Ex-adversarial: ${slice.correct}/${slice.total} (${(slice.accuracy * 100).toFixed(2)}%)`
+    )
+  }
 
   if (result.memscore && result.tokens) {
     const qualityPct = Math.round(result.summary.accuracy * 100)
