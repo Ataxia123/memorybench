@@ -8,7 +8,11 @@ describe("Bonfires extractive prompt", () => {
         ? EXTRACTIVE_PROMPTS.answerPrompt(
             "When did Melanie go?",
             [
-              { text: "Resolved date: Friday before 2023-07-15 = 2023-07-14", score: 1, kind: "answer_hint" },
+              {
+                text: "Resolved date: Friday before 2023-07-15 = 2023-07-14",
+                score: 1,
+                kind: "answer_hint",
+              },
               { text: "Melanie went last Friday.", score: 0.9, kind: "chunk" },
             ],
             "2023-07-15"
@@ -22,6 +26,43 @@ describe("Bonfires extractive prompt", () => {
     expect(prompt).toContain("exact phrase")
     expect(prompt).toContain("modal or likelihood questions")
     expect(prompt).toContain("strongest ranked behavioral")
+  })
+
+  test("renders Delve HyperMem payloads into the answer-visible context", () => {
+    const prompt =
+      typeof EXTRACTIVE_PROMPTS.answerPrompt === "function"
+        ? EXTRACTIVE_PROMPTS.answerPrompt(
+            "How many events?",
+            [
+              {
+                text: "## Relevant Facts:\n[Fact 1] Count evidence",
+                score: null,
+                kind: "delve_payload",
+                metadata: {
+                  delve_payload: {
+                    context: "## Relevant Facts:\n[Fact 1] Count evidence",
+                    answer_context_envelope: {
+                      answer_candidates: [
+                        {
+                          family: "count",
+                          answer_evidence: { scalar: { kind: "event_count", value: "3" } },
+                        },
+                      ],
+                    },
+                    facts: [{ score: 0.9, data: { content: "Count evidence" } }],
+                  },
+                },
+              },
+            ],
+            "2023-07-15"
+          )
+        : ""
+
+    expect(prompt).toContain("[Delve HyperMem Payload]")
+    expect(prompt).toContain('"answer_context_envelope"')
+    expect(prompt).toContain('"answer_candidates"')
+    expect(prompt).toContain('"value": "3"')
+    expect(prompt).toContain("treat it as the authoritative")
   })
 
   test("provides a Zep-style lenient LoCoMo judge prompt for comparable runs", () => {

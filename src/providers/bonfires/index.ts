@@ -28,7 +28,8 @@ function buildZepContextString(context: unknown[]): string {
   const communities: string[] = []
   const other: string[] = []
   for (const h of hits) {
-    const line = `  - ${h.text}`
+    const payload = buildDelvePayloadContextBlock(h)
+    const line = payload ? payload : `  - ${h.text}`
     switch (h.kind) {
       case "claim":
       case "fact":
@@ -76,7 +77,8 @@ function buildStructuredContextString(context: unknown[]): string {
   // over-confident on weak adversarial evidence. Plain bullets.
   for (const h of hits) {
     if (!h?.text) continue
-    const line = `  - ${h.text}`
+    const payload = buildDelvePayloadContextBlock(h)
+    const line = payload ? payload : `  - ${h.text}`
     switch (h.kind) {
       case "chunk":
         chunks.push(line)
@@ -120,9 +122,23 @@ function buildRankedContextString(context: unknown[]): string {
   for (let i = 0; i < hits.length; i++) {
     const h = hits[i]
     if (!h?.text) continue
-    lines.push(`${i + 1}. ${h.text}`)
+    const payload = buildDelvePayloadContextBlock(h)
+    lines.push(payload ? `${i + 1}. ${payload}` : `${i + 1}. ${h.text}`)
   }
   return lines.join("\n")
+}
+
+function buildDelvePayloadContextBlock(hit: SearchHit): string {
+  if (hit.kind !== "delve_payload") return ""
+  const payload = hit.metadata?.delve_payload
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return `[Delve HyperMem Context]\n${hit.text}`
+  }
+  try {
+    return `[Delve HyperMem Payload]\n${JSON.stringify(payload, null, 2)}`
+  } catch {
+    return `[Delve HyperMem Context]\n${hit.text}`
+  }
 }
 
 export function buildExtractiveContextString(context: unknown[]): string {
@@ -142,46 +158,53 @@ Question: ${question}
 
 Rules:
 1. Return the shortest exact answer supported by the context. No explanation.
-2. For list or set questions, scan all relevant FACT/claim lines and return
+2. When a Delve HyperMem payload is present, treat it as the authoritative
+   retrieval result. Use its context, answer_context_envelope, facts,
+   evidence, episodes, topics, and diagnostics as the available evidence.
+3. For list or set questions, scan all relevant FACT/claim lines and return
    the union of distinct supported candidates. Do not stop at the first
    matching line. Use ranked context order only to resolve direct conflicts,
    not to drop additional compatible items.
-3. Prefer exact FACT/claim wording over broad entity or episode summaries.
-4. Ignore answer_hint lines unless there is no factual evidence.
-5. For list questions, separate candidates with commas. Do not collapse
+4. Prefer exact FACT/claim wording over broad entity or episode summaries.
+5. Ignore answer_hint lines unless there is no factual evidence.
+6. For list questions, separate candidates with commas. Do not collapse
    multiple candidates into one broad category.
-6. For date questions, use any "[resolved relative time: ...]" annotation
+7. For date questions, use any "[resolved relative time: ...]" annotation
    before raw words like "yesterday", "last week", or "this month".
-7. For specific objects, titles, signs, names, places, identities, statuses,
+8. For specific objects, titles, signs, names, places, identities, statuses,
    or emotions, copy
    the exact phrase from the context when present.
-8. When the question names a specific date, prefer memories whose occurred
+9. When the question names a specific date, prefer memories whose occurred
    date matches that date and ignore different-date memories unless there is
    no same-date evidence.
-9. For modal or likelihood questions using words like "would", "likely",
+10. For modal or likelihood questions using words like "would", "likely",
    "considered", or "might", infer the shortest supported answer from the
    strongest ranked behavioral, status, identity, or event evidence. Do not
    require the context to contain the exact yes/no wording from the question.
-10. For counterfactual questions with an "if" condition, answer from the
+11. For counterfactual questions with an "if" condition, answer from the
    evidence after applying the condition. If the context says the removed
    condition enabled, motivated, caused, or sustained the outcome, answer
    no/likely no; if the outcome is independently supported, answer yes.
-11. For modal questions about whether someone would do something soon, weigh
+12. For modal questions about whether someone would do something soon, weigh
    current plans, obligations, statuses, and active commitments as likelihood
    evidence even when the exact proposed action is not stated. For yes/no
    likelihood questions, an active competing commitment is enough evidence
    for likely no; do not require direct evidence about the rejected alternative.
-12. For "what kind/type of X" questions, answer with the descriptor or subtype
+13. For "what kind/type of X" questions, answer with the descriptor or subtype
    of X. Prefer a ranked fact that actually describes X over a nearby fact
    about a different object, even if the nearby fact matches the action words.
-13. If the context contains no relevant evidence at all, answer exactly:
+14. If the context contains no relevant evidence at all, answer exactly:
    I don't know
 
 Answer:`
   },
 }
 
-export function buildLenientLocomoJudgePrompt(question: string, groundTruth: string, hypothesis: string) {
+export function buildLenientLocomoJudgePrompt(
+  question: string,
+  groundTruth: string,
+  hypothesis: string
+) {
   return {
     default: `Your task is to label an answer to a question as 'CORRECT' or 'WRONG'. You will be given the following data:
     (1) a question (posed by one user to another user),
@@ -338,8 +361,11 @@ ${contextStr}
 
 Rules:
 1. If the context does not clearly support an answer, respond "I don't know".
-2. Only use information from the retrieved context.
-3. Answer concisely.
+2. When the retrieved context is a Delve HyperMem payload, use the full
+   payload as evidence, including context, answer_context_envelope, facts,
+   evidence, episodes, topics, and diagnostics.
+3. Only use information from the retrieved context.
+4. Answer concisely.
 
 Answer:`
   },

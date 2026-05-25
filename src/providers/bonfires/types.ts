@@ -150,7 +150,11 @@ export interface HybridSearchResult {
 }
 
 export interface HyperMemSearchResult {
+  bonfire_id?: string
+  profile?: string
+  query?: string
   context?: string
+  answer_context_envelope?: Record<string, unknown>
   topics?: Array<{ score?: number | null; data?: Record<string, unknown> }>
   episodes?: Array<{ score?: number | null; data?: Record<string, unknown> }>
   facts?: Array<{ score?: number | null; source?: string; data?: Record<string, unknown> }>

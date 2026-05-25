@@ -160,8 +160,15 @@ describe("armSearch", () => {
         config: { ...baseCfg, arm: "hypermem" },
       })
       expect(client.hypermemSearch.mock.calls[0][0].outputType).toBe("111")
-      expect(client.hypermemSearch.mock.calls[0][0].factTopK).toBe(20)
-      expect(out.map((h) => h.kind)).toEqual(["community", "episode", "fact", "fact", "fact", "fact"])
+      expect(client.hypermemSearch.mock.calls[0][0].factTopK).toBe(14)
+      expect(out.map((h) => h.kind)).toEqual([
+        "community",
+        "episode",
+        "fact",
+        "fact",
+        "fact",
+        "fact",
+      ])
       expect(out[0].text).toBe("[TOPIC] Topic: Topic summary")
       expect(out[1].text).toBe("[EPISODE] Episode summary [occurred 8 May 2023]")
       expect(out[2].text).toBe("[FACT] Grammar fact")
@@ -259,14 +266,16 @@ describe("armSearch", () => {
     }
   })
 
-  it("hypermem arm ignores formatted context and trusts returned arrays", async () => {
+  it("hypermem arm consumes Delve formatted context and preserves the full payload", async () => {
     const prevOutputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
     const prevOrder = process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
     const prevReranker = process.env.BONFIRES_HYPERMEM_RERANKER
+    const prevDiagnostics = process.env.BONFIRES_HYPERMEM_DIAGNOSTICS
     try {
       process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = "011"
       process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = "score"
       process.env.BONFIRES_HYPERMEM_RERANKER = "0"
+      process.env.BONFIRES_HYPERMEM_DIAGNOSTICS = "1"
       const client = {
         hypermemSearch: mock(async () => ({
           context: [
@@ -293,6 +302,10 @@ describe("armSearch", () => {
               data: { content: "Returned graph fact", temporal: "2023-07-16T10:00:00.000Z" },
             },
           ],
+          answer_context_envelope: {
+            answer_candidates: [{ family: "temporal", answer_evidence: { answer_kind: "date" } }],
+          },
+          diagnostics: { context_token_count: 42 },
         })),
       }
       const out = await armSearch({
@@ -300,10 +313,16 @@ describe("armSearch", () => {
         query: "observation",
         config: { ...baseCfg, arm: "hypermem" },
       })
-      expect(out.map((h) => h.text)).toEqual([
-        "[FACT] Direct fact one [occurred 15 July 2023]",
-        "[FACT] Returned graph fact [occurred 16 July 2023]",
-      ])
+      expect(out).toHaveLength(1)
+      expect(out[0].kind).toBe("delve_payload")
+      expect(out[0].text).toContain("Context-only observation fact")
+      expect(out[0].text).toContain("Context-only graph fact")
+      expect(out[0].metadata?.delve_payload).toMatchObject({
+        answer_context_envelope: {
+          answer_candidates: [{ family: "temporal" }],
+        },
+      })
+      expect(out[0].metadata?.hypermem_diagnostics).toEqual({ context_token_count: 42 })
     } finally {
       if (prevOutputType === undefined) delete process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
       else process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = prevOutputType
@@ -311,6 +330,8 @@ describe("armSearch", () => {
       else process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER = prevOrder
       if (prevReranker === undefined) delete process.env.BONFIRES_HYPERMEM_RERANKER
       else process.env.BONFIRES_HYPERMEM_RERANKER = prevReranker
+      if (prevDiagnostics === undefined) delete process.env.BONFIRES_HYPERMEM_DIAGNOSTICS
+      else process.env.BONFIRES_HYPERMEM_DIAGNOSTICS = prevDiagnostics
     }
   })
 

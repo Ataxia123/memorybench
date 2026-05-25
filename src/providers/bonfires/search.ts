@@ -1,5 +1,5 @@
 import type { BonfiresClient } from "./client.js"
-import type { BonfiresConfig, KgDelveResult } from "./types.js"
+import type { BonfiresConfig, HyperMemSearchResult, KgDelveResult } from "./types.js"
 import { humanizeDatesInText } from "./dateHumanize.js"
 
 /** Set of entity labels dropped from the rerank pool by smart_hybrid.
@@ -17,7 +17,15 @@ export interface SearchHit {
    *  <FACTS> vs <ENTITIES> sections. "fact" = edges (relationship claims
    *  with valid_at), "entity" = nodes (name + summary). Optional — hits
    *  without a kind fall through as "other" (treated as facts). */
-  kind?: "fact" | "claim" | "entity" | "episode" | "community" | "chunk" | "answer_hint"
+  kind?:
+    | "fact"
+    | "claim"
+    | "entity"
+    | "episode"
+    | "community"
+    | "chunk"
+    | "answer_hint"
+    | "delve_payload"
   metadata?: Record<string, unknown>
 }
 
@@ -100,7 +108,26 @@ function renderHypermemHitText(prefix: string, content: string, temporal: unknow
   return humanizeDatesInText(`${prefix} ${cleanContent} (event_time: ${temporalText})`)
 }
 
-function slimHypermemDiagnostics(diagnostics: Record<string, unknown> | undefined): Record<string, unknown> {
+function hypermemPayloadHit(
+  result: HyperMemSearchResult,
+  diagnostics: Record<string, unknown>
+): SearchHit | null {
+  const context = typeof result.context === "string" ? result.context.trim() : ""
+  if (!context) return null
+  return {
+    text: context,
+    score: null,
+    kind: "delve_payload",
+    metadata: {
+      delve_payload: result,
+      ...(Object.keys(diagnostics).length > 0 ? { hypermem_diagnostics: diagnostics } : {}),
+    },
+  }
+}
+
+function slimHypermemDiagnostics(
+  diagnostics: Record<string, unknown> | undefined
+): Record<string, unknown> {
   if (!diagnostics || process.env.BONFIRES_HYPERMEM_DIAGNOSTICS !== "1") return {}
   const scalarKeys = [
     "latency_ms",
@@ -166,11 +193,21 @@ function slimHypermemDiagnostics(diagnostics: Record<string, unknown> | undefine
 function compactGrammarTraceList(value: unknown): Record<string, unknown>[] {
   if (!Array.isArray(value)) return []
   return value
-    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
+    .filter(
+      (item): item is Record<string, unknown> =>
+        Boolean(item) && typeof item === "object" && !Array.isArray(item)
+    )
     .slice(0, 8)
     .map((item) => {
       const out: Record<string, unknown> = {}
-      for (const key of ["recipe_kind", "matched", "artifact_kind", "artifact_preview", "rejection_reason", "trace_id"]) {
+      for (const key of [
+        "recipe_kind",
+        "matched",
+        "artifact_kind",
+        "artifact_preview",
+        "rejection_reason",
+        "trace_id",
+      ]) {
         const field = item[key]
         if (typeof field === "string" || typeof field === "number" || typeof field === "boolean") {
           out[key] = field
@@ -179,10 +216,18 @@ function compactGrammarTraceList(value: unknown): Record<string, unknown>[] {
       const boundSlots = item.bound_slots
       if (boundSlots && typeof boundSlots === "object" && !Array.isArray(boundSlots)) {
         const slots: Record<string, unknown> = {}
-        for (const [slot, values] of Object.entries(boundSlots as Record<string, unknown>).slice(0, 8)) {
+        for (const [slot, values] of Object.entries(boundSlots as Record<string, unknown>).slice(
+          0,
+          8
+        )) {
           if (Array.isArray(values)) {
             slots[slot] = values
-              .filter((value) => typeof value === "string" || typeof value === "number" || typeof value === "boolean")
+              .filter(
+                (value) =>
+                  typeof value === "string" ||
+                  typeof value === "number" ||
+                  typeof value === "boolean"
+              )
               .slice(0, 8)
           }
         }
@@ -195,7 +240,10 @@ function compactGrammarTraceList(value: unknown): Record<string, unknown>[] {
 function compactConsumedArtifactList(value: unknown): Record<string, unknown>[] {
   if (!Array.isArray(value)) return []
   return value
-    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
+    .filter(
+      (item): item is Record<string, unknown> =>
+        Boolean(item) && typeof item === "object" && !Array.isArray(item)
+    )
     .slice(0, 8)
     .map((item) => {
       const out: Record<string, unknown> = {}
@@ -205,11 +253,20 @@ function compactConsumedArtifactList(value: unknown): Record<string, unknown>[] 
           out[key] = field
         }
       }
-      for (const key of ["statement_ids", "source_fact_ids", "episode_ids", "source_message_ids", "source_episode_ids"]) {
+      for (const key of [
+        "statement_ids",
+        "source_fact_ids",
+        "episode_ids",
+        "source_message_ids",
+        "source_episode_ids",
+      ]) {
         const field = item[key]
         if (Array.isArray(field)) {
           out[key] = field
-            .filter((value) => typeof value === "string" || typeof value === "number" || typeof value === "boolean")
+            .filter(
+              (value) =>
+                typeof value === "string" || typeof value === "number" || typeof value === "boolean"
+            )
             .slice(0, 8)
         }
       }
@@ -220,8 +277,13 @@ function compactConsumedArtifactList(value: unknown): Record<string, unknown>[] 
 function compactTypedArtifactList(value: unknown): Record<string, unknown>[] {
   if (!Array.isArray(value)) return []
   return value
-    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
-    .filter((item) => item.artifact_family === "AggregateSet" || item.aggregate_kind === "event_count")
+    .filter(
+      (item): item is Record<string, unknown> =>
+        Boolean(item) && typeof item === "object" && !Array.isArray(item)
+    )
+    .filter(
+      (item) => item.artifact_family === "AggregateSet" || item.aggregate_kind === "event_count"
+    )
     .slice(0, 8)
     .map((item) => {
       const out: Record<string, unknown> = {}
@@ -242,11 +304,20 @@ function compactTypedArtifactList(value: unknown): Record<string, unknown>[] {
           out[key] = field
         }
       }
-      for (const key of ["statement_ids", "source_fact_ids", "episode_ids", "source_message_ids", "source_episode_ids"]) {
+      for (const key of [
+        "statement_ids",
+        "source_fact_ids",
+        "episode_ids",
+        "source_message_ids",
+        "source_episode_ids",
+      ]) {
         const field = item[key]
         if (Array.isArray(field)) {
           out[key] = field
-            .filter((value) => typeof value === "string" || typeof value === "number" || typeof value === "boolean")
+            .filter(
+              (value) =>
+                typeof value === "string" || typeof value === "number" || typeof value === "boolean"
+            )
             .slice(0, 8)
         }
       }
@@ -369,7 +440,7 @@ export async function armSearch(args: {
           ),
           topicTopK: parseInt(process.env.BONFIRES_HYPERMEM_TOPIC_TOP_K ?? "4", 10),
           episodeTopK: parseInt(process.env.BONFIRES_HYPERMEM_EPISODE_TOP_K ?? "6", 10),
-          factTopK: parseInt(process.env.BONFIRES_HYPERMEM_FACT_TOP_K ?? "20", 10),
+          factTopK: parseInt(process.env.BONFIRES_HYPERMEM_FACT_TOP_K ?? "14", 10),
           outputType,
           useReranker: process.env.BONFIRES_HYPERMEM_RERANKER !== "0",
           useLateReranker: process.env.BONFIRES_HYPERMEM_LATE_RERANKER === "1",
@@ -448,6 +519,8 @@ export async function armSearch(args: {
           }))
         const ordered = orderedHypermemHits(outputType, { topics, episodes, facts, evidence })
         const diagnostics = slimHypermemDiagnostics(r.diagnostics)
+        const payloadHit = hypermemPayloadHit(r, diagnostics)
+        if (payloadHit) return [payloadHit]
         if (Object.keys(diagnostics).length > 0 && ordered[0]) {
           ordered[0] = {
             ...ordered[0],

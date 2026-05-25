@@ -845,7 +845,7 @@ export class BonfiresClient {
         initial_candidates: args.initialCandidates ?? 100,
         topic_top_k: args.topicTopK ?? 4,
         episode_top_k: args.episodeTopK ?? 6,
-        fact_top_k: args.factTopK ?? 30,
+        fact_top_k: args.factTopK ?? 14,
         retrieval_type: "rrf",
         output_type: args.outputType ?? "111",
         use_reranker: args.useReranker ?? true,
@@ -868,7 +868,12 @@ export class BonfiresClient {
     factTopK?: number
     outputType?: string
     useReranker?: boolean
-  }): Promise<{ success: boolean; bonfire_id: string; profile: string; diagnostics: Record<string, unknown> }> {
+  }): Promise<{
+    success: boolean
+    bonfire_id: string
+    profile: string
+    diagnostics: Record<string, unknown>
+  }> {
     const body = {
       bonfire_id: args.bonfireId,
       profile: args.profile ?? "nlp_single_graph_v1",
