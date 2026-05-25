@@ -8,6 +8,59 @@ import { logger } from "../../utils/logger"
 import { ConcurrentExecutor } from "../concurrent"
 import { resolveConcurrency } from "../../types/concurrency"
 
+export function slimResultsForCheckpoint(results: unknown[]): unknown[] {
+  return results.map((result) => {
+    if (!result || typeof result !== "object" || Array.isArray(result)) return result
+    const item = result as Record<string, unknown>
+    if (item.kind !== "delve_payload") return result
+    const metadata = item.metadata
+    const metadataRecord =
+      metadata && typeof metadata === "object" && !Array.isArray(metadata)
+        ? (metadata as Record<string, unknown>)
+        : {}
+    const payload = metadataRecord.delve_payload
+    const payloadRecord =
+      payload && typeof payload === "object" && !Array.isArray(payload)
+        ? (payload as Record<string, unknown>)
+        : {}
+    return {
+      text: item.text,
+      score: item.score ?? null,
+      kind: item.kind,
+      metadata: {
+        hypermem_diagnostics: metadataRecord.hypermem_diagnostics,
+        delve_payload_summary: summarizeDelvePayloadForCheckpoint(payloadRecord),
+      },
+    }
+  })
+}
+
+function summarizeDelvePayloadForCheckpoint(
+  payload: Record<string, unknown>
+): Record<string, unknown> {
+  const envelope = payload.answer_context_envelope
+  const envelopeRecord =
+    envelope && typeof envelope === "object" && !Array.isArray(envelope)
+      ? (envelope as Record<string, unknown>)
+      : {}
+  return {
+    bonfire_id: payload.bonfire_id,
+    profile: payload.profile,
+    query: payload.query,
+    counts: {
+      topics: Array.isArray(payload.topics) ? payload.topics.length : 0,
+      episodes: Array.isArray(payload.episodes) ? payload.episodes.length : 0,
+      facts: Array.isArray(payload.facts) ? payload.facts.length : 0,
+      evidence: Array.isArray(payload.evidence) ? payload.evidence.length : 0,
+    },
+    answer_context_envelope: {
+      selected_answer_candidates: envelopeRecord.selected_answer_candidates,
+      answer_candidates: envelopeRecord.answer_candidates,
+      graph_hydration: envelopeRecord.graph_hydration,
+    },
+  }
+}
+
 export async function runSearchPhase(
   provider: Provider,
   benchmark: Benchmark,
@@ -79,7 +132,7 @@ export async function runSearchPhase(
         checkpointManager.updatePhase(checkpoint, question.questionId, "search", {
           status: "completed",
           resultFile,
-          results,
+          results: slimResultsForCheckpoint(results),
           completedAt: new Date().toISOString(),
           durationMs,
         })
