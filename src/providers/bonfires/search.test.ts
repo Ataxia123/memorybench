@@ -266,7 +266,7 @@ describe("armSearch", () => {
     }
   })
 
-  it("hypermem arm consumes Delve formatted context and preserves the full payload", async () => {
+  it("hypermem arm consumes Delve formatted context and preserves compact answer payload", async () => {
     const prevOutputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
     const prevOrder = process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER
     const prevReranker = process.env.BONFIRES_HYPERMEM_RERANKER
@@ -290,6 +290,9 @@ describe("armSearch", () => {
             "[Graph Fact 1] Context-only graph fact",
             "  Time: 2023-07-16T10:00:00.000Z",
           ].join("\n"),
+          bonfire_id: "analytics-only",
+          profile: "nlp_single_graph_v1",
+          query: "observation",
           facts: [
             {
               score: 0.3,
@@ -318,11 +321,22 @@ describe("armSearch", () => {
       expect(out[0].text).toContain("Context-only observation fact")
       expect(out[0].text).toContain("Context-only graph fact")
       expect(out[0].metadata?.delve_payload).toMatchObject({
+        context: expect.stringContaining("Context-only observation fact"),
         answer_context_envelope: {
           answer_candidates: [{ family: "temporal" }],
         },
       })
-      expect(out[0].metadata?.hypermem_diagnostics).toEqual({ context_token_count: 42 })
+      const payload = out[0].metadata?.delve_payload as Record<string, unknown>
+      expect(payload.bonfire_id).toBeUndefined()
+      expect(payload.profile).toBeUndefined()
+      expect(payload.query).toBeUndefined()
+      expect(payload.facts).toBeUndefined()
+      expect(payload.evidence).toBeUndefined()
+      expect(payload.diagnostics).toBeUndefined()
+      expect(out[0].metadata?.hypermem_analytics).toEqual({
+        payload_counts: { topics: 0, episodes: 0, facts: 1, evidence: 1 },
+        diagnostics: { context_token_count: 42 },
+      })
     } finally {
       if (prevOutputType === undefined) delete process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
       else process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE = prevOutputType

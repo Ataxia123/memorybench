@@ -40,6 +40,9 @@ describe("Bonfires extractive prompt", () => {
                 kind: "delve_payload",
                 metadata: {
                   delve_payload: {
+                    bonfire_id: "analytics-only",
+                    profile: "nlp_single_graph_v1",
+                    query: "How many events?",
                     context: "## Relevant Facts:\n[Fact 1] Count evidence",
                     answer_context_envelope: {
                       answer_candidates: [
@@ -49,6 +52,7 @@ describe("Bonfires extractive prompt", () => {
                         },
                       ],
                     },
+                    diagnostics: { context_token_count: 42 },
                     facts: [{ score: 0.9, data: { content: "Count evidence" } }],
                   },
                 },
@@ -58,10 +62,16 @@ describe("Bonfires extractive prompt", () => {
           )
         : ""
 
-    expect(prompt).toContain("[Delve HyperMem Payload]")
+    expect(prompt).toContain("[Delve HyperMem Context]")
+    expect(prompt).toContain("[Delve Answer Candidates]")
     expect(prompt).toContain('"answer_context_envelope"')
     expect(prompt).toContain('"answer_candidates"')
-    expect(prompt).toContain('"value": "3"')
+    expect(prompt).toContain('"value":"3"')
+    expect(prompt).not.toContain("analytics-only")
+    expect(prompt).not.toContain('"profile"')
+    expect(prompt).not.toContain('"query"')
+    expect(prompt).not.toContain('"diagnostics"')
+    expect(prompt).not.toContain('"facts"')
     expect(prompt).toContain("treat it as the authoritative")
   })
 

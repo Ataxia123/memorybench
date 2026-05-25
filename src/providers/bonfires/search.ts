@@ -119,10 +119,109 @@ function hypermemPayloadHit(
     score: null,
     kind: "delve_payload",
     metadata: {
-      delve_payload: result,
-      ...(Object.keys(diagnostics).length > 0 ? { hypermem_diagnostics: diagnostics } : {}),
+      delve_payload: compactHypermemAnswerPayload(result),
+      hypermem_analytics: compactHypermemAnalytics(result, diagnostics),
     },
   }
+}
+
+function compactHypermemAnswerPayload(result: HyperMemSearchResult): Record<string, unknown> {
+  return {
+    context: typeof result.context === "string" ? result.context : "",
+    answer_context_envelope: compactAnswerContextEnvelope(result.answer_context_envelope),
+  }
+}
+
+function compactHypermemAnalytics(
+  result: HyperMemSearchResult,
+  diagnostics: Record<string, unknown>
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {
+    payload_counts: {
+      topics: Array.isArray(result.topics) ? result.topics.length : 0,
+      episodes: Array.isArray(result.episodes) ? result.episodes.length : 0,
+      facts: Array.isArray(result.facts) ? result.facts.length : 0,
+      evidence: Array.isArray(result.evidence) ? result.evidence.length : 0,
+    },
+  }
+  if (Object.keys(diagnostics).length > 0) out.diagnostics = diagnostics
+  return out
+}
+
+function compactAnswerContextEnvelope(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {}
+  const envelope = value as Record<string, unknown>
+  const out: Record<string, unknown> = {}
+  const selected = compactAnswerCandidateList(envelope.selected_answer_candidates)
+  const candidates = compactAnswerCandidateList(envelope.answer_candidates)
+  if (selected.length > 0) out.selected_answer_candidates = selected
+  if (candidates.length > 0) out.answer_candidates = candidates
+  return out
+}
+
+function compactAnswerCandidateList(value: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter(
+      (item): item is Record<string, unknown> =>
+        Boolean(item) && typeof item === "object" && !Array.isArray(item)
+    )
+    .slice(0, 5)
+    .map(compactAnswerCandidate)
+}
+
+function compactAnswerCandidate(candidate: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const key of ["family", "kind", "status", "confidence", "completeness"]) {
+    const value = candidate[key]
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      out[key] = value
+    }
+  }
+  for (const key of ["value", "answer", "normalized_value"]) {
+    const value = candidate[key]
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      out[key] = value
+    }
+  }
+  const typedCues = compactRecord(candidate.typed_cues, 8)
+  const answerEvidence = compactRecord(candidate.answer_evidence, 12)
+  const support = compactRecord(candidate.support, 10)
+  const conflicts = compactRecord(candidate.conflicts, 8)
+  const evidenceRefs = compactPrimitiveList(candidate.evidence_refs, 12)
+  const artifactRefs = compactPrimitiveList(candidate.artifact_refs, 12)
+  if (Object.keys(typedCues).length > 0) out.typed_cues = typedCues
+  if (Object.keys(answerEvidence).length > 0) out.answer_evidence = answerEvidence
+  if (Object.keys(support).length > 0) out.support = support
+  if (Object.keys(conflicts).length > 0) out.conflicts = conflicts
+  if (evidenceRefs.length > 0) out.evidence_refs = evidenceRefs
+  if (artifactRefs.length > 0) out.artifact_refs = artifactRefs
+  return out
+}
+
+function compactRecord(value: unknown, maxEntries: number): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {}
+  const out: Record<string, unknown> = {}
+  for (const [key, item] of Object.entries(value as Record<string, unknown>).slice(0, maxEntries)) {
+    if (typeof item === "string" || typeof item === "number" || typeof item === "boolean") {
+      out[key] = item
+    } else if (Array.isArray(item)) {
+      out[key] = compactPrimitiveList(item, 12)
+    } else if (item && typeof item === "object") {
+      const nested = compactRecord(item, 8)
+      if (Object.keys(nested).length > 0) out[key] = nested
+    }
+  }
+  return out
+}
+
+function compactPrimitiveList(value: unknown, maxItems: number): unknown[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter(
+      (item) => typeof item === "string" || typeof item === "number" || typeof item === "boolean"
+    )
+    .slice(0, maxItems)
 }
 
 function slimHypermemDiagnostics(
@@ -180,14 +279,74 @@ function slimHypermemDiagnostics(
     "graph_post_hydration_timings_ms",
     "query_embedder_delta",
     "query_embedder_stats",
-    "construction_grammar",
   ]) {
     const value = diagnostics[key]
     if (value && typeof value === "object" && !Array.isArray(value)) {
       out[key] = value
     }
   }
+  const constructionGrammar = compactConstructionGrammarDiagnostics(
+    diagnostics.construction_grammar
+  )
+  if (Object.keys(constructionGrammar).length > 0) {
+    out.construction_grammar = constructionGrammar
+  }
   return out
+}
+
+function compactConstructionGrammarDiagnostics(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {}
+  const diagnostics = value as Record<string, unknown>
+  const out: Record<string, unknown> = {}
+  const matchedRecipes = compactGrammarTraceList(diagnostics.matched_recipes)
+  const rejectedRecipes = compactGrammarTraceList(diagnostics.rejected_recipes)
+  const queryPlan = compactGrammarTraceList(diagnostics.query_plan)
+  const consumedArtifacts = compactConsumedArtifactList(diagnostics.consumed_artifacts)
+  if (matchedRecipes.length > 0) out.matched_recipes = matchedRecipes.slice(0, 6)
+  if (rejectedRecipes.length > 0) out.rejected_recipes = rejectedRecipes.slice(0, 6)
+  if (queryPlan.length > 0) out.query_plan = queryPlan.slice(0, 6)
+  if (consumedArtifacts.length > 0) out.consumed_artifacts = consumedArtifacts.slice(0, 6)
+  for (const key of ["recipe_consumption", "lane_consumption"]) {
+    const compact = compactAnalyticsRecordList(diagnostics[key], 8)
+    if (compact.length > 0) out[key] = compact
+  }
+  for (const key of [
+    "recipe_artifact_links",
+    "top_evidence_ids",
+    "lanes",
+    "artifact_candidates",
+    "acceptance_canary",
+  ]) {
+    const compact = compactAnalyticsValue(diagnostics[key])
+    if (
+      (Array.isArray(compact) && compact.length > 0) ||
+      (compact && typeof compact === "object" && Object.keys(compact).length > 0)
+    ) {
+      out[key] = compact
+    }
+  }
+  return out
+}
+
+function compactAnalyticsRecordList(value: unknown, maxItems: number): Record<string, unknown>[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter(
+      (item): item is Record<string, unknown> =>
+        Boolean(item) && typeof item === "object" && !Array.isArray(item)
+    )
+    .slice(0, maxItems)
+    .map((item) => compactRecord(item, 8))
+    .filter((item) => Object.keys(item).length > 0)
+}
+
+function compactAnalyticsValue(value: unknown): unknown {
+  if (Array.isArray(value)) return compactPrimitiveList(value, 12)
+  if (value && typeof value === "object") return compactRecord(value, 8)
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return value
+  }
+  return undefined
 }
 
 function compactGrammarTraceList(value: unknown): Record<string, unknown>[] {

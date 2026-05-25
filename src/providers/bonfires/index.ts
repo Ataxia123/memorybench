@@ -135,10 +135,126 @@ function buildDelvePayloadContextBlock(hit: SearchHit): string {
     return `[Delve HyperMem Context]\n${hit.text}`
   }
   try {
-    return `[Delve HyperMem Payload]\n${JSON.stringify(payload, null, 2)}`
+    return renderDelvePayloadForPrompt(compactDelvePayloadForPrompt(payload))
   } catch {
     return `[Delve HyperMem Context]\n${hit.text}`
   }
+}
+
+function compactDelvePayloadForPrompt(payload: Record<string, unknown>): Record<string, unknown> {
+  const envelope = objectValue(payload.answer_context_envelope)
+  const out: Record<string, unknown> = {}
+  const context = typeof payload.context === "string" ? payload.context.trim() : ""
+  if (context) out.context = pruneDelveContextForPrompt(context)
+  const selected = compactAnswerCandidateList(envelope.selected_answer_candidates)
+  const candidates = compactAnswerCandidateList(envelope.answer_candidates)
+  if (selected.length > 0 || candidates.length > 0) {
+    out.answer_context_envelope = {
+      ...(selected.length > 0 ? { selected_answer_candidates: selected } : {}),
+      ...(candidates.length > 0 ? { answer_candidates: candidates } : {}),
+    }
+  }
+  return out
+}
+
+function renderDelvePayloadForPrompt(payload: Record<string, unknown>): string {
+  const parts: string[] = []
+  const context = typeof payload.context === "string" ? payload.context.trim() : ""
+  if (context) parts.push(`[Delve HyperMem Context]\n${context}`)
+  const envelope = objectValue(payload.answer_context_envelope)
+  if (Object.keys(envelope).length > 0) {
+    parts.push(
+      `[Delve Answer Candidates]\n${JSON.stringify({ answer_context_envelope: envelope })}`
+    )
+  }
+  return parts.length > 0 ? parts.join("\n\n") : "[Delve HyperMem Context]\n"
+}
+
+function pruneDelveContextForPrompt(context: string): string {
+  const lines = context.split("\n")
+  const out: string[] = []
+  let skippingTopics = false
+  for (const line of lines) {
+    if (line.trim() === "## Relevant Topics:") {
+      skippingTopics = true
+      continue
+    }
+    if (skippingTopics && line.startsWith("## ")) {
+      skippingTopics = false
+    }
+    if (!skippingTopics) out.push(line)
+  }
+  return out.join("\n").trim()
+}
+
+function compactAnswerCandidateList(value: unknown): Record<string, unknown>[] {
+  return arrayValue(value)
+    .filter(
+      (item): item is Record<string, unknown> =>
+        Boolean(item) && typeof item === "object" && !Array.isArray(item)
+    )
+    .slice(0, 5)
+    .map(compactAnswerCandidate)
+}
+
+function compactAnswerCandidate(candidate: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const key of ["family", "kind", "status", "confidence", "completeness"]) {
+    const value = candidate[key]
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      out[key] = value
+    }
+  }
+  for (const key of ["value", "answer", "normalized_value"]) {
+    const value = candidate[key]
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      out[key] = value
+    }
+  }
+  const typedCues = compactRecord(candidate.typed_cues, 8)
+  const answerEvidence = compactRecord(candidate.answer_evidence, 12)
+  const evidenceRefs = compactPrimitiveList(candidate.evidence_refs, 12)
+  const artifactRefs = compactPrimitiveList(candidate.artifact_refs, 12)
+  if (Object.keys(typedCues).length > 0) out.typed_cues = typedCues
+  if (Object.keys(answerEvidence).length > 0) out.answer_evidence = answerEvidence
+  if (evidenceRefs.length > 0) out.evidence_refs = evidenceRefs
+  if (artifactRefs.length > 0) out.artifact_refs = artifactRefs
+  return out
+}
+
+function compactRecord(value: unknown, maxEntries: number): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {}
+  const out: Record<string, unknown> = {}
+  for (const [key, item] of Object.entries(value as Record<string, unknown>).slice(0, maxEntries)) {
+    if (typeof item === "string" || typeof item === "number" || typeof item === "boolean") {
+      out[key] = item
+    } else if (Array.isArray(item)) {
+      const list = compactPrimitiveList(item, 12)
+      if (list.length > 0) out[key] = list
+    } else if (item && typeof item === "object") {
+      const nested = compactRecord(item, 8)
+      if (Object.keys(nested).length > 0) out[key] = nested
+    }
+  }
+  return out
+}
+
+function compactPrimitiveList(value: unknown, maxItems: number): unknown[] {
+  return arrayValue(value)
+    .filter(
+      (item) => typeof item === "string" || typeof item === "number" || typeof item === "boolean"
+    )
+    .slice(0, maxItems)
+}
+
+function objectValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {}
+}
+
+function arrayValue(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : []
 }
 
 export function buildExtractiveContextString(context: unknown[]): string {
@@ -159,8 +275,8 @@ Question: ${question}
 Rules:
 1. Return the shortest exact answer supported by the context. No explanation.
 2. When a Delve HyperMem payload is present, treat it as the authoritative
-   retrieval result. Use its context, answer_context_envelope, facts,
-   evidence, episodes, topics, and diagnostics as the available evidence.
+   retrieval result. Use its context and answer_context_envelope as the
+   available evidence.
 3. For list or set questions, scan all relevant FACT/claim lines and return
    the union of distinct supported candidates. Do not stop at the first
    matching line. Use ranked context order only to resolve direct conflicts,
@@ -361,9 +477,8 @@ ${contextStr}
 
 Rules:
 1. If the context does not clearly support an answer, respond "I don't know".
-2. When the retrieved context is a Delve HyperMem payload, use the full
-   payload as evidence, including context, answer_context_envelope, facts,
-   evidence, episodes, topics, and diagnostics.
+2. When the retrieved context is a Delve HyperMem payload, use its answer
+   payload as evidence, including context and answer_context_envelope.
 3. Only use information from the retrieved context.
 4. Answer concisely.
 
