@@ -189,6 +189,94 @@ describe("armSearch", () => {
     }
   })
 
+  it("hypermem arm can route through the memory-kernel endpoint", async () => {
+    const prevEndpoint = process.env.BONFIRES_SEARCH_ENDPOINT
+    const prevProfile = process.env.BONFIRES_HYPERMEM_PROFILE
+    const prevTopK = process.env.BONFIRES_MEMORY_KERNEL_TOP_K
+    const prevCandidateLimit = process.env.BONFIRES_MEMORY_KERNEL_CANDIDATE_LIMIT
+    const prevSurfaceLimit = process.env.BONFIRES_MEMORY_KERNEL_SURFACE_LIMIT
+    const prevConstructLimit = process.env.BONFIRES_MEMORY_KERNEL_CONSTRUCT_CANDIDATE_LIMIT
+    const prevUseFcg = process.env.BONFIRES_MEMORY_KERNEL_USE_FCG
+    try {
+      process.env.BONFIRES_SEARCH_ENDPOINT = "memory-kernel"
+      process.env.BONFIRES_HYPERMEM_PROFILE = "nlp_single_graph_v1"
+      process.env.BONFIRES_MEMORY_KERNEL_TOP_K = "7"
+      process.env.BONFIRES_MEMORY_KERNEL_CANDIDATE_LIMIT = "31"
+      process.env.BONFIRES_MEMORY_KERNEL_SURFACE_LIMIT = "5"
+      process.env.BONFIRES_MEMORY_KERNEL_CONSTRUCT_CANDIDATE_LIMIT = "13"
+      process.env.BONFIRES_MEMORY_KERNEL_USE_FCG = "1"
+      const client = {
+        memoryKernelSearch: mock(async () => ({
+          evidence: [
+            {
+              candidate_id: "construct:1",
+              family: "construct_occurrence",
+              score: 0.75,
+              text: "Alice met Bob.",
+              source: "fcg",
+              source_ids: ["stmt-1"],
+              metadata: { recipe: "topic_relation" },
+            },
+          ],
+          diagnostics: { fcg_selected_topic_count: 2 },
+        })),
+        hypermemSearch: mock(async () => ({ facts: [] })),
+      }
+      const out = await armSearch({
+        client: client as unknown as Parameters<typeof armSearch>[0]["client"],
+        query: "who met Bob?",
+        config: { ...baseCfg, arm: "hypermem" },
+      })
+      expect(client.hypermemSearch.mock.calls.length).toBe(0)
+      expect(client.memoryKernelSearch.mock.calls[0][0]).toEqual({
+        bonfireId: "bf",
+        query: "who met Bob?",
+        profile: "nlp_single_graph_v1",
+        topK: 7,
+        candidateLimit: 31,
+        surfaceLimit: 5,
+        constructCandidateLimit: 13,
+        useFcg: true,
+        hydrateGraph: true,
+        embedQuery: true,
+        surfaceFamilies: [],
+      })
+      expect(out).toEqual([
+        {
+          text: "[CONSTRUCT_OCCURRENCE] Alice met Bob.",
+          score: 0.75,
+          kind: "fact",
+          metadata: {
+            source: "fcg",
+            memory_kernel: {
+              candidate_id: "construct:1",
+              family: "construct_occurrence",
+              source_ids: ["stmt-1"],
+              metadata: { recipe: "topic_relation" },
+              diagnostics: { fcg_selected_topic_count: 2 },
+            },
+          },
+        },
+      ])
+    } finally {
+      if (prevEndpoint === undefined) delete process.env.BONFIRES_SEARCH_ENDPOINT
+      else process.env.BONFIRES_SEARCH_ENDPOINT = prevEndpoint
+      if (prevProfile === undefined) delete process.env.BONFIRES_HYPERMEM_PROFILE
+      else process.env.BONFIRES_HYPERMEM_PROFILE = prevProfile
+      if (prevTopK === undefined) delete process.env.BONFIRES_MEMORY_KERNEL_TOP_K
+      else process.env.BONFIRES_MEMORY_KERNEL_TOP_K = prevTopK
+      if (prevCandidateLimit === undefined) delete process.env.BONFIRES_MEMORY_KERNEL_CANDIDATE_LIMIT
+      else process.env.BONFIRES_MEMORY_KERNEL_CANDIDATE_LIMIT = prevCandidateLimit
+      if (prevSurfaceLimit === undefined) delete process.env.BONFIRES_MEMORY_KERNEL_SURFACE_LIMIT
+      else process.env.BONFIRES_MEMORY_KERNEL_SURFACE_LIMIT = prevSurfaceLimit
+      if (prevConstructLimit === undefined)
+        delete process.env.BONFIRES_MEMORY_KERNEL_CONSTRUCT_CANDIDATE_LIMIT
+      else process.env.BONFIRES_MEMORY_KERNEL_CONSTRUCT_CANDIDATE_LIMIT = prevConstructLimit
+      if (prevUseFcg === undefined) delete process.env.BONFIRES_MEMORY_KERNEL_USE_FCG
+      else process.env.BONFIRES_MEMORY_KERNEL_USE_FCG = prevUseFcg
+    }
+  })
+
   it("hypermem arm preserves explicit topic-hidden output type for token tuning runs", async () => {
     const prevOutputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
     const prevOrder = process.env.BONFIRES_HYPERMEM_CONTEXT_ORDER

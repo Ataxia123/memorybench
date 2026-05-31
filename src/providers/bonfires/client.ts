@@ -11,6 +11,7 @@ import type {
   ChunksSearchHit,
   HybridSearchResult,
   HyperMemSearchResult,
+  MemoryKernelSearchResult,
 } from "./types.js"
 
 type FetchLike = typeof fetch
@@ -851,6 +852,34 @@ export class BonfiresClient {
         use_reranker: args.useReranker ?? true,
         use_late_reranker: args.useLateReranker ?? false,
       },
+    })
+  }
+
+  memoryKernelSearch(args: {
+    bonfireId: string
+    query: string
+    profile?: string
+    topK?: number
+    candidateLimit?: number
+    surfaceLimit?: number
+    constructCandidateLimit?: number
+    useFcg?: boolean
+    hydrateGraph?: boolean
+    embedQuery?: boolean
+    surfaceFamilies?: string[]
+  }): Promise<MemoryKernelSearchResult> {
+    return this.req<MemoryKernelSearchResult>("POST", "/search/memory-kernel", {
+      bonfire_id: args.bonfireId,
+      profile: args.profile ?? "nlp_single_graph_v1",
+      query: args.query,
+      top_k: args.topK ?? 20,
+      candidate_limit: args.candidateLimit ?? 100,
+      surface_limit: args.surfaceLimit ?? 12,
+      construct_candidate_limit: args.constructCandidateLimit ?? 64,
+      use_fcg: args.useFcg ?? true,
+      hydrate_graph: args.hydrateGraph ?? true,
+      embed_query: args.embedQuery ?? true,
+      surface_families: args.surfaceFamilies ?? [],
     })
   }
 

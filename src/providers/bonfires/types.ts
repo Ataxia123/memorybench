@@ -162,6 +162,25 @@ export interface HyperMemSearchResult {
   diagnostics?: Record<string, unknown>
 }
 
+export interface MemoryKernelSearchResult {
+  bonfire_id?: string
+  profile?: string
+  query?: string
+  answer_text?: string
+  evidence?: Array<{
+    candidate_id?: string
+    family?: string
+    score?: number | null
+    text?: string
+    source?: string
+    source_ids?: string[]
+    metadata?: Record<string, unknown>
+  }>
+  candidate_count?: number
+  surface_query_count?: number
+  diagnostics?: Record<string, unknown>
+}
+
 export type BonfiresArm =
   | "vector"
   | "graph"

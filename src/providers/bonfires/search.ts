@@ -1,5 +1,10 @@
 import type { BonfiresClient } from "./client.js"
-import type { BonfiresConfig, HyperMemSearchResult, KgDelveResult } from "./types.js"
+import type {
+  BonfiresConfig,
+  HyperMemSearchResult,
+  KgDelveResult,
+  MemoryKernelSearchResult,
+} from "./types.js"
 import { humanizeDatesInText } from "./dateHumanize.js"
 
 /** Set of entity labels dropped from the rerank pool by smart_hybrid.
@@ -222,6 +227,53 @@ function compactPrimitiveList(value: unknown, maxItems: number): unknown[] {
       (item) => typeof item === "string" || typeof item === "number" || typeof item === "boolean"
     )
     .slice(0, maxItems)
+}
+
+function parseEnvInt(name: string, fallback: number): number {
+  const value = process.env[name]
+  if (!value) return fallback
+  const parsed = parseInt(value, 10)
+  return Number.isFinite(parsed) ? parsed : fallback
+}
+
+function parseEnvBool(name: string, fallback: boolean): boolean {
+  const value = process.env[name]
+  if (value === undefined) return fallback
+  return !["0", "false", "no", "off"].includes(value.trim().toLowerCase())
+}
+
+function parseEnvCsv(name: string): string[] {
+  const value = process.env[name]
+  if (!value) return []
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
+function memoryKernelHits(result: MemoryKernelSearchResult): SearchHit[] {
+  const hits: SearchHit[] = []
+  for (const item of result.evidence ?? []) {
+    const text = String(item.text ?? "").trim()
+    if (!text) continue
+    const family = String(item.family ?? "construct_occurrence")
+    hits.push({
+      text: `[${family.toUpperCase()}] ${humanizeDatesInText(text)}`,
+      score: item.score ?? null,
+      kind: family === "episode_manifest" ? "episode" : "fact",
+      metadata: {
+        source: item.source ?? "memory-kernel",
+        memory_kernel: {
+          candidate_id: item.candidate_id,
+          family,
+          source_ids: item.source_ids ?? [],
+          metadata: item.metadata ?? {},
+          diagnostics: result.diagnostics ?? {},
+        },
+      },
+    })
+  }
+  return hits
 }
 
 function slimHypermemDiagnostics(
@@ -579,7 +631,13 @@ function slimHypermemMetadata(data: Record<string, unknown> | undefined): Record
 export async function armSearch(args: {
   client: Pick<
     BonfiresClient,
-    "vectorSearch" | "kgDelve" | "chunksSearch" | "hubTraversal" | "hybridSearch" | "hypermemSearch"
+    | "vectorSearch"
+    | "kgDelve"
+    | "chunksSearch"
+    | "hubTraversal"
+    | "hybridSearch"
+    | "hypermemSearch"
+    | "memoryKernelSearch"
   >
   query: string
   config: BonfiresConfig
@@ -592,6 +650,32 @@ export async function armSearch(args: {
   try {
     switch (config.arm) {
       case "hypermem": {
+        const endpoint = (process.env.BONFIRES_SEARCH_ENDPOINT ?? "hypermem")
+          .trim()
+          .toLowerCase()
+          .replace("_", "-")
+        if (endpoint === "memory-kernel") {
+          const r = await client.memoryKernelSearch({
+            bonfireId: config.bonfireId,
+            query,
+            profile: process.env.BONFIRES_HYPERMEM_PROFILE ?? "nlp_single_graph_v1",
+            topK: parseEnvInt(
+              "BONFIRES_MEMORY_KERNEL_TOP_K",
+              parseEnvInt("BONFIRES_HYPERMEM_FACT_TOP_K", 20)
+            ),
+            candidateLimit: parseEnvInt("BONFIRES_MEMORY_KERNEL_CANDIDATE_LIMIT", 100),
+            surfaceLimit: parseEnvInt("BONFIRES_MEMORY_KERNEL_SURFACE_LIMIT", 12),
+            constructCandidateLimit: parseEnvInt(
+              "BONFIRES_MEMORY_KERNEL_CONSTRUCT_CANDIDATE_LIMIT",
+              64
+            ),
+            useFcg: parseEnvBool("BONFIRES_MEMORY_KERNEL_USE_FCG", true),
+            hydrateGraph: parseEnvBool("BONFIRES_MEMORY_KERNEL_HYDRATE_GRAPH", true),
+            embedQuery: parseEnvBool("BONFIRES_MEMORY_KERNEL_EMBED_QUERY", true),
+            surfaceFamilies: parseEnvCsv("BONFIRES_MEMORY_KERNEL_SURFACE_FAMILIES"),
+          })
+          return memoryKernelHits(r)
+        }
         const outputType = process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE ?? "111"
         const r = await client.hypermemSearch({
           bonfireId: config.bonfireId,
