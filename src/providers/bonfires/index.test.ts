@@ -43,7 +43,10 @@ describe("Bonfires extractive prompt", () => {
                     bonfire_id: "analytics-only",
                     profile: "nlp_single_graph_v1",
                     query: "How many events?",
-                    context: "## Relevant Facts:\n[Fact 1] Count evidence",
+                    context:
+                      "## Relevant Topics:\n[Topic 1] Evidence-linked topic summary\n\n" +
+                      "## Relevant Facts:\n[Fact 1] Count evidence\n\n" +
+                      "## Answer Candidates:\n[Candidate 1] value: 3",
                     answer_context_envelope: {
                       answer_candidates: [
                         {
@@ -63,10 +66,12 @@ describe("Bonfires extractive prompt", () => {
         : ""
 
     expect(prompt).toContain("[Delve HyperMem Context]")
-    expect(prompt).toContain("[Delve Answer Candidates]")
-    expect(prompt).toContain('"answer_context_envelope"')
-    expect(prompt).toContain('"answer_candidates"')
-    expect(prompt).toContain('"value":"3"')
+    expect(prompt).toContain("Evidence-linked topic summary")
+    expect(prompt).toContain("## Answer Candidates:")
+    expect(prompt).toContain("value: 3")
+    expect(prompt).not.toContain("[Delve Answer Candidates]")
+    expect(prompt).not.toContain('"answer_context_envelope"')
+    expect(prompt).not.toContain('"answer_candidates"')
     expect(prompt).not.toContain("analytics-only")
     expect(prompt).not.toContain('"profile"')
     expect(prompt).not.toContain('"query"')

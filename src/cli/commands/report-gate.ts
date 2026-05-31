@@ -15,6 +15,7 @@ interface ReportGateArgs {
   runId: string
   metric: "ex-adversarial"
   min?: number
+  minTypeAccuracy?: number
   maxSearchMeanMs?: number
   maxSearchMedianMs?: number
   maxSearchP95Ms?: number
@@ -22,6 +23,7 @@ interface ReportGateArgs {
 
 interface GateReport {
   slice: QuestionSliceStats
+  byQuestionType: Record<string, QuestionSliceStats>
   searchLatency?: LatencyStats
   source: "report" | "checkpoint"
 }
@@ -44,6 +46,8 @@ function parseArgs(args: string[]): ReportGateArgs | null {
       if (metric === "ex-adversarial") parsed.metric = metric
     } else if (arg === "--min") {
       parsed.min = parseNumber(args[++i])
+    } else if (arg === "--min-type-accuracy") {
+      parsed.minTypeAccuracy = parseNumber(args[++i])
     } else if (arg === "--max-search-mean-ms") {
       parsed.maxSearchMeanMs = parseNumber(args[++i])
     } else if (arg === "--max-search-median-ms") {
@@ -80,6 +84,44 @@ function computeSliceFromCheckpoint(checkpoint: RunCheckpoint): QuestionSliceSta
   }
 }
 
+export function computeTypeSlicesFromEvaluations(
+  evaluations: EvaluationResult[],
+  excludeTypes: string[] = ["adversarial"]
+): Record<string, QuestionSliceStats> {
+  const excluded = new Set(excludeTypes)
+  const byType: Record<string, QuestionSliceStats> = {}
+  for (const evaluation of evaluations) {
+    if (excluded.has(evaluation.questionType)) continue
+    const stats = (byType[evaluation.questionType] ??= { total: 0, correct: 0, accuracy: 0 })
+    stats.total += 1
+    if (evaluation.score === 1) stats.correct += 1
+  }
+  for (const stats of Object.values(byType)) {
+    stats.accuracy = stats.total > 0 ? stats.correct / stats.total : 0
+  }
+  return byType
+}
+
+function computeTypeSlicesFromCheckpoint(checkpoint: RunCheckpoint): Record<string, QuestionSliceStats> {
+  const evaluations: EvaluationResult[] = Object.values(checkpoint.questions)
+    .filter((question) => question.phases.evaluate.status === "completed")
+    .map((question) => ({
+      questionId: question.questionId,
+      questionType: question.questionType,
+      question: question.question,
+      score: question.phases.evaluate.score === 1 ? 1 : 0,
+      label: question.phases.evaluate.score === 1 ? "correct" : "incorrect",
+      explanation: question.phases.evaluate.explanation ?? "",
+      hypothesis: question.phases.answer.hypothesis ?? "",
+      groundTruth: question.groundTruth,
+      searchResults: question.phases.search.results ?? [],
+      searchDurationMs: question.phases.search.durationMs ?? 0,
+      answerDurationMs: question.phases.answer.durationMs ?? 0,
+      totalDurationMs: 0,
+    }))
+  return computeTypeSlicesFromEvaluations(evaluations)
+}
+
 function calculateLatencyStats(durations: number[]): LatencyStats | undefined {
   if (durations.length === 0) return undefined
   const sorted = [...durations].sort((a, b) => a - b)
@@ -106,6 +148,7 @@ function loadGateReport(runId: string): GateReport | null {
     const report = JSON.parse(readFileSync(reportPath, "utf8")) as BenchmarkResult
     return {
       slice: report.slices?.exAdversarial ?? computeSliceFromEvaluations(report.evaluations),
+      byQuestionType: computeTypeSlicesFromEvaluations(report.evaluations),
       searchLatency: report.latency.search,
       source: "report",
     }
@@ -120,6 +163,7 @@ function loadGateReport(runId: string): GateReport | null {
 
   return {
     slice: computeSliceFromCheckpoint(checkpoint),
+    byQuestionType: computeTypeSlicesFromCheckpoint(checkpoint),
     searchLatency: calculateLatencyStats(searchDurations),
     source: "checkpoint",
   }
@@ -132,6 +176,7 @@ function printUsage(): void {
   console.log("  -r, --run-id              Run identifier")
   console.log("  --metric                  Metric to gate, currently ex-adversarial")
   console.log("  --min                     Minimum ex-adversarial accuracy, e.g. 0.80")
+  console.log("  --min-type-accuracy       Minimum per-type ex-adversarial accuracy, e.g. 0.60")
   console.log("  --max-search-mean-ms      Maximum mean search latency")
   console.log("  --max-search-median-ms    Maximum median search latency")
   console.log("  --max-search-p95-ms       Maximum p95 search latency")
@@ -158,6 +203,17 @@ export async function reportGateCommand(args: string[]): Promise<void> {
       `ex-adversarial accuracy ${(slice.accuracy * 100).toFixed(2)}% is below ${(parsed.min * 100).toFixed(2)}%`
     )
   }
+  if (parsed.minTypeAccuracy !== undefined) {
+    for (const [questionType, stats] of Object.entries(gateReport.byQuestionType).sort(([a], [b]) =>
+      a.localeCompare(b)
+    )) {
+      if (stats.accuracy < parsed.minTypeAccuracy) {
+        failures.push(
+          `${questionType} accuracy ${(stats.accuracy * 100).toFixed(2)}% is below ${(parsed.minTypeAccuracy * 100).toFixed(2)}%`
+        )
+      }
+    }
+  }
 
   const latency = gateReport.searchLatency
   if (latency) {
@@ -180,6 +236,13 @@ export async function reportGateCommand(args: string[]): Promise<void> {
     console.log(
       `Search latency: mean=${latency.mean}ms median=${latency.median}ms p95=${latency.p95}ms count=${latency.count}`
     )
+  }
+  const typeEntries = Object.entries(gateReport.byQuestionType).sort(([a], [b]) => a.localeCompare(b))
+  if (typeEntries.length > 0) {
+    console.log("Ex-adversarial by type:")
+    for (const [questionType, stats] of typeEntries) {
+      console.log(`  ${questionType}: ${stats.correct}/${stats.total} (${(stats.accuracy * 100).toFixed(2)}%)`)
+    }
   }
 
   if (failures.length > 0) {

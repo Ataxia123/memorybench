@@ -145,7 +145,8 @@ function compactDelvePayloadForPrompt(payload: Record<string, unknown>): Record<
   const envelope = objectValue(payload.answer_context_envelope)
   const out: Record<string, unknown> = {}
   const context = typeof payload.context === "string" ? payload.context.trim() : ""
-  if (context) out.context = pruneDelveContextForPrompt(context)
+  if (context) out.context = context
+  if (context) return out
   const selected = compactAnswerCandidateList(envelope.selected_answer_candidates)
   const candidates = compactAnswerCandidateList(envelope.answer_candidates)
   if (selected.length > 0 || candidates.length > 0) {
@@ -168,23 +169,6 @@ function renderDelvePayloadForPrompt(payload: Record<string, unknown>): string {
     )
   }
   return parts.length > 0 ? parts.join("\n\n") : "[Delve HyperMem Context]\n"
-}
-
-function pruneDelveContextForPrompt(context: string): string {
-  const lines = context.split("\n")
-  const out: string[] = []
-  let skippingTopics = false
-  for (const line of lines) {
-    if (line.trim() === "## Relevant Topics:") {
-      skippingTopics = true
-      continue
-    }
-    if (skippingTopics && line.startsWith("## ")) {
-      skippingTopics = false
-    }
-    if (!skippingTopics) out.push(line)
-  }
-  return out.join("\n").trim()
 }
 
 function compactAnswerCandidateList(value: unknown): Record<string, unknown>[] {
@@ -275,8 +259,7 @@ Question: ${question}
 Rules:
 1. Return the shortest exact answer supported by the context. No explanation.
 2. When a Delve HyperMem payload is present, treat it as the authoritative
-   retrieval result. Use its context and answer_context_envelope as the
-   available evidence.
+   retrieval result. Use its rendered context as the available evidence.
 3. For list or set questions, scan all relevant FACT/claim lines and return
    the union of distinct supported candidates. Do not stop at the first
    matching line. Use ranked context order only to resolve direct conflicts,
@@ -478,7 +461,7 @@ ${contextStr}
 Rules:
 1. If the context does not clearly support an answer, respond "I don't know".
 2. When the retrieved context is a Delve HyperMem payload, use its answer
-   payload as evidence, including context and answer_context_envelope.
+   payload as evidence.
 3. Only use information from the retrieved context.
 4. Answer concisely.
 

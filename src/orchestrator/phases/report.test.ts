@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { computeQuestionSlice } from "./report"
+import { computeTypeSlicesFromEvaluations } from "../../cli/commands/report-gate"
 import type { EvaluationResult } from "../../types/unified"
 
 function evaluation(questionId: string, questionType: string, score: number): EvaluationResult {
@@ -31,6 +32,30 @@ describe("computeQuestionSlice", () => {
       total: 2,
       correct: 1,
       accuracy: 0.5,
+    })
+  })
+})
+
+describe("computeTypeSlicesFromEvaluations", () => {
+  test("computes per-type ex-adversarial accuracy", () => {
+    const slices = computeTypeSlicesFromEvaluations([
+      evaluation("q1", "single-hop", 1),
+      evaluation("q2", "single-hop", 0),
+      evaluation("q3", "temporal", 1),
+      evaluation("q4", "adversarial", 0),
+    ])
+
+    expect(slices).toEqual({
+      "single-hop": {
+        total: 2,
+        correct: 1,
+        accuracy: 0.5,
+      },
+      temporal: {
+        total: 1,
+        correct: 1,
+        accuracy: 1,
+      },
     })
   })
 })

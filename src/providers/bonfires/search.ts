@@ -231,6 +231,9 @@ function slimHypermemDiagnostics(
   const scalarKeys = [
     "latency_ms",
     "route_total_latency_ms",
+    "route_pre_response_latency_ms",
+    "answer_context_envelope_ms",
+    "final_context_format_ms",
     "hypermem_load_ms",
     "query_embedding_ms",
     "query_vector_origin",
@@ -277,8 +280,9 @@ function slimHypermemDiagnostics(
     "graph_hydration_anchor_counts",
     "graph_hydration_limits",
     "graph_post_hydration_timings_ms",
-    "query_embedder_delta",
-    "query_embedder_stats",
+    "query_embedder_call",
+    "query_embedder_process_delta",
+    "query_embedder_process_stats",
   ]) {
     const value = diagnostics[key]
     if (value && typeof value === "object" && !Array.isArray(value)) {

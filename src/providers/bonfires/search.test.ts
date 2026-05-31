@@ -413,6 +413,21 @@ describe("armSearch", () => {
       const client = {
         hypermemSearch: mock(async () => ({
           diagnostics: {
+            route_total_latency_ms: 456.7,
+            route_pre_response_latency_ms: 400.1,
+            answer_context_envelope_ms: 12.3,
+            final_context_format_ms: 4.5,
+            query_embedding_ms: 123.4,
+            query_embedder_call: {
+              path: "provider",
+              queue_wait_ms: 20.1,
+              provider_ms: 103.3,
+              total_ms: 123.4,
+            },
+            query_embedder_process_stats: {
+              provider_concurrency: 1,
+              cache_hits: 4,
+            },
             construction_grammar: {
               matched_recipes: [{ recipe_kind: "TEMPORAL_ROLE_BOUND_EVENT" }],
               top_evidence_ids: ["fact-1"],
@@ -490,6 +505,21 @@ describe("armSearch", () => {
       expect(hypermem.event_action).toBe("planned")
       expect(hypermem.event_object).toBe("coffee")
       expect(out[0].metadata?.hypermem_diagnostics).toEqual({
+        route_total_latency_ms: 456.7,
+        route_pre_response_latency_ms: 400.1,
+        answer_context_envelope_ms: 12.3,
+        final_context_format_ms: 4.5,
+        query_embedding_ms: 123.4,
+        query_embedder_call: {
+          path: "provider",
+          queue_wait_ms: 20.1,
+          provider_ms: 103.3,
+          total_ms: 123.4,
+        },
+        query_embedder_process_stats: {
+          provider_concurrency: 1,
+          cache_hits: 4,
+        },
         construction_grammar: {
           matched_recipes: [{ recipe_kind: "TEMPORAL_ROLE_BOUND_EVENT" }],
           top_evidence_ids: ["fact-1"],

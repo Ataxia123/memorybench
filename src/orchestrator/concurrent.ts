@@ -50,6 +50,18 @@ export class ConcurrentExecutor {
       `[${phaseName}] Processing ${items.length} items with concurrency ${concurrency} (${totalBatches} batches)`
     )
 
+    if (rateLimitMs === 0) {
+      return this.executeWithWorkerPool({
+        items,
+        concurrency,
+        runId,
+        phaseName,
+        executeTask,
+        onTaskComplete,
+        onError,
+      })
+    }
+
     for (let batchIdx = 0; batchIdx < totalBatches; batchIdx++) {
       if (shouldStop(runId)) {
         logger.info(`[${phaseName}] Run ${runId} stopped by user`)
@@ -98,8 +110,57 @@ export class ConcurrentExecutor {
         await new Promise((resolve) => setTimeout(resolve, rateLimitMs))
       }
     }
-
     return allResults
+  }
+
+  private static async executeWithWorkerPool<T, R>({
+    items,
+    concurrency,
+    runId,
+    phaseName,
+    executeTask,
+    onTaskComplete,
+    onError,
+  }: Omit<
+    ConcurrentExecutionOptions<T, R>,
+    "rateLimitMs" | "onBatchStart" | "onBatchComplete"
+  >): Promise<R[]> {
+    const workerCount = Math.min(concurrency, items.length)
+    const resultsByIndex: R[] = []
+    let nextIndex = 0
+    let firstError: Error | null = null
+
+    const worker = async (): Promise<void> => {
+      while (firstError === null) {
+        if (shouldStop(runId)) {
+          logger.info(`[${phaseName}] Run ${runId} stopped by user`)
+          firstError = new Error(`Run stopped by user. Resume with the same run ID.`)
+          return
+        }
+
+        const index = nextIndex++
+        if (index >= items.length) return
+        const context: ConcurrentTaskContext<T> = {
+          item: items[index],
+          index,
+          total: items.length,
+        }
+
+        try {
+          const result = await executeTask(context)
+          onTaskComplete?.(context, result)
+          resultsByIndex[index] = result
+        } catch (error) {
+          const err = error instanceof Error ? error : new Error(String(error))
+          onError?.(context, err)
+          firstError ??= err
+        }
+      }
+    }
+
+    await Promise.all(Array.from({ length: workerCount }, () => worker()))
+    if (firstError) throw firstError
+    return resultsByIndex.filter((result): result is R => result !== undefined)
   }
 
   /**
