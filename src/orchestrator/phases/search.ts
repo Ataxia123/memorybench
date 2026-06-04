@@ -12,12 +12,29 @@ export function slimResultsForCheckpoint(results: unknown[]): unknown[] {
   return results.map((result) => {
     if (!result || typeof result !== "object" || Array.isArray(result)) return result
     const item = result as Record<string, unknown>
-    if (item.kind !== "delve_payload") return result
     const metadata = item.metadata
     const metadataRecord =
       metadata && typeof metadata === "object" && !Array.isArray(metadata)
         ? (metadata as Record<string, unknown>)
         : {}
+    const memoryKernel = metadataRecord.memory_kernel
+    const memoryKernelRecord =
+      memoryKernel && typeof memoryKernel === "object" && !Array.isArray(memoryKernel)
+        ? (memoryKernel as Record<string, unknown>)
+        : {}
+    if (Object.keys(memoryKernelRecord).length > 0) {
+      return {
+        text: item.text,
+        score: item.score ?? null,
+        kind: item.kind,
+        metadata: {
+          source: metadataRecord.source,
+          memory_kernel: summarizeMemoryKernelForCheckpoint(memoryKernelRecord),
+        },
+      }
+    }
+
+    if (item.kind !== "delve_payload") return result
     const payload = metadataRecord.delve_payload
     const payloadRecord =
       payload && typeof payload === "object" && !Array.isArray(payload)
@@ -33,6 +50,88 @@ export function slimResultsForCheckpoint(results: unknown[]): unknown[] {
       },
     }
   })
+}
+
+function summarizeMemoryKernelForCheckpoint(
+  memoryKernel: Record<string, unknown>
+): Record<string, unknown> {
+  const diagnostics = recordValue(memoryKernel.diagnostics)
+  return {
+    candidate_id: memoryKernel.candidate_id,
+    family: memoryKernel.family,
+    source_ids: memoryKernel.source_ids,
+    metadata: summarizeMemoryKernelCandidateMetadata(recordValue(memoryKernel.metadata)),
+    diagnostics: {
+      store_ms: diagnostics.store_ms,
+      embed_ms: diagnostics.embed_ms,
+      hydrate_ms: diagnostics.hydrate_ms,
+      search_ms: diagnostics.search_ms,
+      candidate_count: diagnostics.candidate_count,
+      scored_count: diagnostics.scored_count,
+      surface_query_count: diagnostics.surface_query_count,
+      timings_ms: diagnostics.timings_ms,
+      surface_counts: diagnostics.surface_counts,
+      query_embedding: diagnostics.query_embedding,
+      fcg_selection: summarizeFcgSelection(recordValue(diagnostics.fcg_selection)),
+      fcg_comprehend: summarizeStatusAttempts(recordValue(diagnostics.fcg_comprehend)),
+      construct_hydration: diagnostics.construct_hydration,
+      graph_hydration: diagnostics.graph_hydration,
+      construction_learning: diagnostics.construction_learning,
+    },
+  }
+}
+
+function summarizeMemoryKernelCandidateMetadata(
+  metadata: Record<string, unknown>
+): Record<string, unknown> {
+  return {
+    source_kind: metadata.source_kind,
+    evidence_anchor_type: metadata.evidence_anchor_type,
+    statement_id: metadata.statement_id,
+    resolved_statement_ids: metadata.resolved_statement_ids,
+    source_message_ids: metadata.source_message_ids,
+    episode_ids: metadata.episode_ids,
+    topic_id: metadata.topic_id,
+    title: metadata.title,
+    timestamp: metadata.timestamp,
+    confidence: metadata.confidence,
+    resolution_status: metadata.resolution_status,
+    resolution_path: metadata.resolution_path,
+  }
+}
+
+function summarizeFcgSelection(selection: Record<string, unknown>): Record<string, unknown> {
+  return {
+    enabled: selection.enabled,
+    top_k: selection.top_k,
+    threshold: selection.threshold,
+    selected_count: selection.selected_count,
+    construct_definition_count: selection.construct_definition_count,
+    selected_manifests: Array.isArray(selection.selected_manifests)
+      ? selection.selected_manifests.map((manifest) => {
+          const manifestRecord = recordValue(manifest)
+          return {
+            item_id: manifestRecord.item_id,
+            topic_id: manifestRecord.topic_id,
+            taxonomy_label: manifestRecord.taxonomy_label,
+            similarity: manifestRecord.similarity,
+          }
+        })
+      : selection.selected_manifests,
+  }
+}
+
+function summarizeStatusAttempts(value: Record<string, unknown>): Record<string, unknown> {
+  return {
+    status: value.status,
+    attempt_count: value.attempt_count,
+  }
+}
+
+function recordValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {}
 }
 
 function summarizeDelvePayloadForCheckpoint(

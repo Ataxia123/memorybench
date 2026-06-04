@@ -236,6 +236,13 @@ function parseEnvInt(name: string, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback
 }
 
+function parseEnvFloat(name: string, fallback: number): number {
+  const value = process.env[name]
+  if (!value) return fallback
+  const parsed = parseFloat(value)
+  return Number.isFinite(parsed) ? parsed : fallback
+}
+
 function parseEnvBool(name: string, fallback: boolean): boolean {
   const value = process.env[name]
   if (value === undefined) return fallback
@@ -673,6 +680,28 @@ export async function armSearch(args: {
             hydrateGraph: parseEnvBool("BONFIRES_MEMORY_KERNEL_HYDRATE_GRAPH", true),
             embedQuery: parseEnvBool("BONFIRES_MEMORY_KERNEL_EMBED_QUERY", true),
             surfaceFamilies: parseEnvCsv("BONFIRES_MEMORY_KERNEL_SURFACE_FAMILIES"),
+            fcgPrecisionMissPolicy:
+              process.env.BONFIRES_MEMORY_KERNEL_FCG_PRECISION_MISS_POLICY ?? "continue",
+            fcgMissLearningEnabled: parseEnvBool(
+              "BONFIRES_MEMORY_KERNEL_FCG_MISS_LEARNING",
+              false
+            ),
+            fcgLearningTopEvidenceK: parseEnvInt(
+              "BONFIRES_MEMORY_KERNEL_FCG_LEARNING_TOP_EVIDENCE_K",
+              3
+            ),
+            fcgLearningAbstractSupportThreshold: parseEnvInt(
+              "BONFIRES_MEMORY_KERNEL_FCG_ABSTRACT_SUPPORT_THRESHOLD",
+              2
+            ),
+            fcgLearnedOverlayEnabled: parseEnvBool(
+              "BONFIRES_MEMORY_KERNEL_FCG_LEARNED_OVERLAY",
+              false
+            ),
+            fcgLearnedOverlayMinScore: parseEnvFloat(
+              "BONFIRES_MEMORY_KERNEL_FCG_LEARNED_OVERLAY_MIN_SCORE",
+              0.45
+            ),
           })
           return memoryKernelHits(r)
         }

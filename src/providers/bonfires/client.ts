@@ -867,6 +867,12 @@ export class BonfiresClient {
     hydrateGraph?: boolean
     embedQuery?: boolean
     surfaceFamilies?: string[]
+    fcgPrecisionMissPolicy?: string
+    fcgMissLearningEnabled?: boolean
+    fcgLearningTopEvidenceK?: number
+    fcgLearningAbstractSupportThreshold?: number
+    fcgLearnedOverlayEnabled?: boolean
+    fcgLearnedOverlayMinScore?: number
   }): Promise<MemoryKernelSearchResult> {
     return this.req<MemoryKernelSearchResult>("POST", "/search/memory-kernel", {
       bonfire_id: args.bonfireId,
@@ -880,6 +886,12 @@ export class BonfiresClient {
       hydrate_graph: args.hydrateGraph ?? true,
       embed_query: args.embedQuery ?? true,
       surface_families: args.surfaceFamilies ?? [],
+      fcg_precision_miss_policy: args.fcgPrecisionMissPolicy ?? "continue",
+      fcg_miss_learning_enabled: args.fcgMissLearningEnabled ?? false,
+      fcg_learning_top_evidence_k: args.fcgLearningTopEvidenceK ?? 3,
+      fcg_learning_abstract_support_threshold: args.fcgLearningAbstractSupportThreshold ?? 2,
+      fcg_learned_overlay_enabled: args.fcgLearnedOverlayEnabled ?? false,
+      fcg_learned_overlay_min_score: args.fcgLearnedOverlayMinScore ?? 0.45,
     })
   }
 
@@ -906,7 +918,22 @@ export class BonfiresClient {
     const body = {
       bonfire_id: args.bonfireId,
       profile: args.profile ?? "nlp_single_graph_v1",
-      stack_payloads: args.stackPayloads,
+      message_batches: args.stackPayloads.map((payload) =>
+        payload.batch_messages.map((message) => ({
+          content: message.text,
+          speaker: message.username ?? message.role,
+          timestamp: message.timestamp,
+          metadata: {
+            ...(message.metadata ?? {}),
+            message_id: message.id,
+            user_id: message.userId,
+            chat_id: message.chatId,
+            role: message.role,
+            session_id: message.sessionId ?? message.chatId,
+            batch_idx: payload.batch_idx,
+          },
+        }))
+      ),
       config: {
         initial_candidates: args.initialCandidates ?? 100,
         topic_top_k: args.topicTopK ?? 4,
@@ -918,7 +945,7 @@ export class BonfiresClient {
       },
     }
     return Promise.resolve(
-      this.reqWithCurl("POST", "/search/hypermem/stack-index", body, { timeoutMs: 7_200_000 })
+      this.reqWithCurl("POST", "/search/memory-kernel/index", body, { timeoutMs: 7_200_000 })
     )
   }
 

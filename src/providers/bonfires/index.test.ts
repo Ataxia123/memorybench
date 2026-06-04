@@ -1,6 +1,28 @@
 import { describe, expect, test } from "bun:test"
 import { BonfiresProvider, EXTRACTIVE_PROMPTS, buildLenientLocomoJudgePrompt } from "./index.js"
 
+function memoryKernelAggregateHit(): Record<string, unknown> {
+  return {
+    text:
+      "[INDEX_DOC] Melanie has 5 distinct playing clarinets events. " +
+      "Evidence: Melanie plays the clarinet.; Melanie uses playing the clarinet as a way to relax. " +
+      "What happened with Melanie? What is known about clarinets? noun:artifact noun:act",
+    score: 0.9,
+    kind: "fact",
+    metadata: {
+      source: "index_doc",
+      memory_kernel: {
+        family: "index_doc",
+        metadata: {
+          source_kind: "event_count_aggregate",
+          evidence_anchor_type: "episode",
+          timestamp: "2023-08-28T16:09:00.000Z",
+        },
+      },
+    },
+  }
+}
+
 describe("Bonfires extractive prompt", () => {
   test("includes ranked list, list, exact phrase, and relative-date rules", () => {
     const prompt =
@@ -22,6 +44,7 @@ describe("Bonfires extractive prompt", () => {
     expect(prompt).toContain("ranked by relevance")
     expect(prompt).toContain("distinct supported candidates")
     expect(prompt).toContain("resolved relative time")
+    expect(prompt).toContain("month/year")
     expect(prompt).toContain("copy")
     expect(prompt).toContain("exact phrase")
     expect(prompt).toContain("modal or likelihood questions")
@@ -78,6 +101,53 @@ describe("Bonfires extractive prompt", () => {
     expect(prompt).not.toContain('"diagnostics"')
     expect(prompt).not.toContain('"facts"')
     expect(prompt).toContain("treat it as the authoritative")
+  })
+
+  test("keeps raw MemoryKernel hits by default for answer quality", () => {
+    const previous = process.env.BONFIRES_MEMORY_KERNEL_COMPACT_CONTEXT
+    delete process.env.BONFIRES_MEMORY_KERNEL_COMPACT_CONTEXT
+    try {
+      const prompt =
+        typeof EXTRACTIVE_PROMPTS.answerPrompt === "function"
+          ? EXTRACTIVE_PROMPTS.answerPrompt(
+              "What instruments does Melanie play?",
+              [memoryKernelAggregateHit()],
+              "2023-08-28"
+            )
+          : ""
+
+      expect(prompt).toContain("[INDEX_DOC] Melanie has 5 distinct playing clarinets events")
+      expect(prompt).toContain("What happened with Melanie")
+      expect(prompt).toContain("noun:artifact")
+      expect(prompt).not.toContain("[MemoryKernel family=index_doc")
+    } finally {
+      if (previous === undefined) delete process.env.BONFIRES_MEMORY_KERNEL_COMPACT_CONTEXT
+      else process.env.BONFIRES_MEMORY_KERNEL_COMPACT_CONTEXT = previous
+    }
+  })
+
+  test("compacts MemoryKernel hits before answer generation when enabled", () => {
+    const previous = process.env.BONFIRES_MEMORY_KERNEL_COMPACT_CONTEXT
+    process.env.BONFIRES_MEMORY_KERNEL_COMPACT_CONTEXT = "1"
+    try {
+      const prompt =
+        typeof EXTRACTIVE_PROMPTS.answerPrompt === "function"
+          ? EXTRACTIVE_PROMPTS.answerPrompt(
+              "What instruments does Melanie play?",
+              [memoryKernelAggregateHit()],
+              "2023-08-28"
+            )
+          : ""
+
+      expect(prompt).toContain("[MemoryKernel family=index_doc")
+      expect(prompt).toContain("source=event_count_aggregate")
+      expect(prompt).toContain("Melanie plays the clarinet")
+      expect(prompt).not.toContain("What happened with Melanie")
+      expect(prompt).not.toContain("noun:artifact")
+    } finally {
+      if (previous === undefined) delete process.env.BONFIRES_MEMORY_KERNEL_COMPACT_CONTEXT
+      else process.env.BONFIRES_MEMORY_KERNEL_COMPACT_CONTEXT = previous
+    }
   })
 
   test("provides a Zep-style lenient LoCoMo judge prompt for comparable runs", () => {

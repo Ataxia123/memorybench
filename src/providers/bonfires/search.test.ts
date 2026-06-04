@@ -197,6 +197,14 @@ describe("armSearch", () => {
     const prevSurfaceLimit = process.env.BONFIRES_MEMORY_KERNEL_SURFACE_LIMIT
     const prevConstructLimit = process.env.BONFIRES_MEMORY_KERNEL_CONSTRUCT_CANDIDATE_LIMIT
     const prevUseFcg = process.env.BONFIRES_MEMORY_KERNEL_USE_FCG
+    const prevMissPolicy = process.env.BONFIRES_MEMORY_KERNEL_FCG_PRECISION_MISS_POLICY
+    const prevMissLearning = process.env.BONFIRES_MEMORY_KERNEL_FCG_MISS_LEARNING
+    const prevTopEvidenceK = process.env.BONFIRES_MEMORY_KERNEL_FCG_LEARNING_TOP_EVIDENCE_K
+    const prevSupportThreshold =
+      process.env.BONFIRES_MEMORY_KERNEL_FCG_ABSTRACT_SUPPORT_THRESHOLD
+    const prevLearnedOverlay = process.env.BONFIRES_MEMORY_KERNEL_FCG_LEARNED_OVERLAY
+    const prevLearnedOverlayMinScore =
+      process.env.BONFIRES_MEMORY_KERNEL_FCG_LEARNED_OVERLAY_MIN_SCORE
     try {
       process.env.BONFIRES_SEARCH_ENDPOINT = "memory-kernel"
       process.env.BONFIRES_HYPERMEM_PROFILE = "nlp_single_graph_v1"
@@ -205,6 +213,12 @@ describe("armSearch", () => {
       process.env.BONFIRES_MEMORY_KERNEL_SURFACE_LIMIT = "5"
       process.env.BONFIRES_MEMORY_KERNEL_CONSTRUCT_CANDIDATE_LIMIT = "13"
       process.env.BONFIRES_MEMORY_KERNEL_USE_FCG = "1"
+      process.env.BONFIRES_MEMORY_KERNEL_FCG_PRECISION_MISS_POLICY = "continue"
+      process.env.BONFIRES_MEMORY_KERNEL_FCG_MISS_LEARNING = "1"
+      process.env.BONFIRES_MEMORY_KERNEL_FCG_LEARNING_TOP_EVIDENCE_K = "3"
+      process.env.BONFIRES_MEMORY_KERNEL_FCG_ABSTRACT_SUPPORT_THRESHOLD = "2"
+      process.env.BONFIRES_MEMORY_KERNEL_FCG_LEARNED_OVERLAY = "1"
+      process.env.BONFIRES_MEMORY_KERNEL_FCG_LEARNED_OVERLAY_MIN_SCORE = "0.45"
       const client = {
         memoryKernelSearch: mock(async () => ({
           evidence: [
@@ -240,6 +254,12 @@ describe("armSearch", () => {
         hydrateGraph: true,
         embedQuery: true,
         surfaceFamilies: [],
+        fcgPrecisionMissPolicy: "continue",
+        fcgMissLearningEnabled: true,
+        fcgLearningTopEvidenceK: 3,
+        fcgLearningAbstractSupportThreshold: 2,
+        fcgLearnedOverlayEnabled: true,
+        fcgLearnedOverlayMinScore: 0.45,
       })
       expect(out).toEqual([
         {
@@ -274,6 +294,28 @@ describe("armSearch", () => {
       else process.env.BONFIRES_MEMORY_KERNEL_CONSTRUCT_CANDIDATE_LIMIT = prevConstructLimit
       if (prevUseFcg === undefined) delete process.env.BONFIRES_MEMORY_KERNEL_USE_FCG
       else process.env.BONFIRES_MEMORY_KERNEL_USE_FCG = prevUseFcg
+      if (prevMissPolicy === undefined)
+        delete process.env.BONFIRES_MEMORY_KERNEL_FCG_PRECISION_MISS_POLICY
+      else process.env.BONFIRES_MEMORY_KERNEL_FCG_PRECISION_MISS_POLICY = prevMissPolicy
+      if (prevMissLearning === undefined)
+        delete process.env.BONFIRES_MEMORY_KERNEL_FCG_MISS_LEARNING
+      else process.env.BONFIRES_MEMORY_KERNEL_FCG_MISS_LEARNING = prevMissLearning
+      if (prevTopEvidenceK === undefined)
+        delete process.env.BONFIRES_MEMORY_KERNEL_FCG_LEARNING_TOP_EVIDENCE_K
+      else process.env.BONFIRES_MEMORY_KERNEL_FCG_LEARNING_TOP_EVIDENCE_K = prevTopEvidenceK
+      if (prevSupportThreshold === undefined)
+        delete process.env.BONFIRES_MEMORY_KERNEL_FCG_ABSTRACT_SUPPORT_THRESHOLD
+      else
+        process.env.BONFIRES_MEMORY_KERNEL_FCG_ABSTRACT_SUPPORT_THRESHOLD =
+          prevSupportThreshold
+      if (prevLearnedOverlay === undefined)
+        delete process.env.BONFIRES_MEMORY_KERNEL_FCG_LEARNED_OVERLAY
+      else process.env.BONFIRES_MEMORY_KERNEL_FCG_LEARNED_OVERLAY = prevLearnedOverlay
+      if (prevLearnedOverlayMinScore === undefined)
+        delete process.env.BONFIRES_MEMORY_KERNEL_FCG_LEARNED_OVERLAY_MIN_SCORE
+      else
+        process.env.BONFIRES_MEMORY_KERNEL_FCG_LEARNED_OVERLAY_MIN_SCORE =
+          prevLearnedOverlayMinScore
     }
   })
 

@@ -28,8 +28,7 @@ function buildZepContextString(context: unknown[]): string {
   const communities: string[] = []
   const other: string[] = []
   for (const h of hits) {
-    const payload = buildDelvePayloadContextBlock(h)
-    const line = payload ? payload : `  - ${h.text}`
+    const line = `  - ${renderSearchHitForPrompt(h)}`
     switch (h.kind) {
       case "claim":
       case "fact":
@@ -72,13 +71,9 @@ function buildStructuredContextString(context: unknown[]): string {
   const episodes: string[] = []
   const communities: string[] = []
   const other: string[] = []
-  // No rank prefix — v77h proved [rank N] labels make GPT-4o overly
-  // cautious (extra "I don't know" answers on world-knowledge) and
-  // over-confident on weak adversarial evidence. Plain bullets.
   for (const h of hits) {
     if (!h?.text) continue
-    const payload = buildDelvePayloadContextBlock(h)
-    const line = payload ? payload : `  - ${h.text}`
+    const line = `  - ${renderSearchHitForPrompt(h)}`
     switch (h.kind) {
       case "chunk":
         chunks.push(line)
@@ -122,10 +117,23 @@ function buildRankedContextString(context: unknown[]): string {
   for (let i = 0; i < hits.length; i++) {
     const h = hits[i]
     if (!h?.text) continue
-    const payload = buildDelvePayloadContextBlock(h)
-    lines.push(payload ? `${i + 1}. ${payload}` : `${i + 1}. ${h.text}`)
+    lines.push(`${i + 1}. ${renderSearchHitForPrompt(h)}`)
   }
   return lines.join("\n")
+}
+
+function renderSearchHitForPrompt(hit: SearchHit): string {
+  const payload = buildDelvePayloadContextBlock(hit)
+  if (payload) return payload
+  if (memoryKernelCompactContextEnabled()) {
+    const memoryKernel = buildMemoryKernelContextBlock(hit)
+    if (memoryKernel) return memoryKernel
+  }
+  return hit.text
+}
+
+function memoryKernelCompactContextEnabled(): boolean {
+  return process.env.BONFIRES_MEMORY_KERNEL_COMPACT_CONTEXT === "1"
 }
 
 function buildDelvePayloadContextBlock(hit: SearchHit): string {
@@ -135,10 +143,81 @@ function buildDelvePayloadContextBlock(hit: SearchHit): string {
     return `[Delve HyperMem Context]\n${hit.text}`
   }
   try {
-    return renderDelvePayloadForPrompt(compactDelvePayloadForPrompt(payload))
+    return renderDelvePayloadForPrompt(compactDelvePayloadForPrompt(payload as Record<string, unknown>))
   } catch {
     return `[Delve HyperMem Context]\n${hit.text}`
   }
+}
+
+function buildMemoryKernelContextBlock(hit: SearchHit): string {
+  const kernel = objectValue(hit.metadata?.memory_kernel)
+  if (Object.keys(kernel).length === 0) return ""
+
+  const metadata = objectValue(kernel.metadata)
+  const family = typeof kernel.family === "string" ? kernel.family : hit.kind || "fact"
+  const sourceKind = typeof metadata.source_kind === "string" ? metadata.source_kind : ""
+  const anchor = typeof metadata.evidence_anchor_type === "string" ? metadata.evidence_anchor_type : ""
+  const timestamp = typeof metadata.timestamp === "string" ? metadata.timestamp : ""
+  const statementId = typeof metadata.statement_id === "string" ? metadata.statement_id : ""
+
+  const labels = [`family=${family}`]
+  if (sourceKind) labels.push(`source=${sourceKind}`)
+  if (anchor) labels.push(`anchor=${anchor}`)
+  if (timestamp) labels.push(`date=${timestamp}`)
+  if (statementId) labels.push(`statement=${statementId}`)
+
+  return `[MemoryKernel ${labels.join(" ")}] ${compactMemoryKernelText(hit.text)}`
+}
+
+function compactMemoryKernelText(value: string): string {
+  const text = stripGeneratedRetrievalTail(value.replace(/^\[[^\]]+\]\s*/, "").trim())
+  if (!text) return ""
+
+  const answeredIndex = text.indexOf(' answered "')
+  const withIndex = text.indexOf(" with: ")
+  if (answeredIndex > 0 && withIndex > answeredIndex) {
+    const setup = text.slice(0, answeredIndex).trim()
+    const answer = stripGeneratedRetrievalTail(text.slice(withIndex + " with: ".length).trim())
+    return sentenceBounded(`${setup}. Answer: ${answer}`, 700)
+  }
+
+  const evidenceIndex = text.indexOf(" Evidence: ")
+  if (evidenceIndex > 0) {
+    const claim = text.slice(0, evidenceIndex).trim()
+    const evidence = stripGeneratedRetrievalTail(text.slice(evidenceIndex + " Evidence: ".length))
+      .split(";")
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .slice(0, 5)
+      .join("; ")
+    return sentenceBounded(evidence ? `${claim}. Evidence: ${evidence}` : claim, 700)
+  }
+
+  return sentenceBounded(text, 700)
+}
+
+function stripGeneratedRetrievalTail(value: string): string {
+  const markers = [
+    " What was the answer when ",
+    " What answer concerned ",
+    " What happened with ",
+    " What is known about ",
+    " What happened when ",
+  ]
+  let end = value.length
+  for (const marker of markers) {
+    const index = value.indexOf(marker)
+    if (index >= 0) end = Math.min(end, index)
+  }
+  return value.slice(0, end).replace(/\s{2,}/g, " ").trim()
+}
+
+function sentenceBounded(value: string, maxChars: number): string {
+  if (value.length <= maxChars) return value
+  const clipped = value.slice(0, maxChars)
+  const sentenceEnd = Math.max(clipped.lastIndexOf(". "), clipped.lastIndexOf("; "))
+  if (sentenceEnd > Math.floor(maxChars * 0.45)) return clipped.slice(0, sentenceEnd + 1).trim()
+  return `${clipped.trim()}...`
 }
 
 function compactDelvePayloadForPrompt(payload: Record<string, unknown>): Record<string, unknown> {
@@ -270,6 +349,9 @@ Rules:
    multiple candidates into one broad category.
 7. For date questions, use any "[resolved relative time: ...]" annotation
    before raw words like "yesterday", "last week", or "this month".
+   If the question names a month/year and asks what happened in that period,
+   answer the event or setback itself; do not introduce a converted
+   relative date outside that named period unless the question asks when.
 8. For specific objects, titles, signs, names, places, identities, statuses,
    or emotions, copy
    the exact phrase from the context when present.
@@ -371,6 +453,9 @@ Rules:
    first. Otherwise use Question Date + event_time fields. Convert relative
    time references ("yesterday", "last week") into specific dates using
    event_time + Question Date. Do not output unresolved relative phrases.
+   If the question already names a month/year and asks what happened in
+   that period, answer the event itself; do not add a converted date outside
+   the named period unless the question asks when.
 8. Timestamps in memories represent the actual event time, NOT the
    conversation-mention time. If "(event_time: 2023-03-15) I went to
    the vet yesterday" and question is "when did I go to the vet?",
@@ -415,9 +500,11 @@ Rules:
    list, or relationship, synthesize freely from multiple facts in the
    context — combine, infer, and connect across CONVERSATION_TURNS, FACTS,
    and EPISODES as needed.
-4. List questions (what/which X has Y done): enumerate EVERY distinct item
-   that appears in the context — do not collapse synonyms or skip items
-   that seem redundant.
+4. List questions (what/which X has Y done, names, pets, items, instruments,
+   activities, events): enumerate EVERY distinct same-type item that appears
+   anywhere in the context. Do not stop at the first precise fact. If a
+   lower-ranked FACT or EPISODE adds a compatible candidate that is not
+   contradicted by earlier evidence, include it.
 5. Hypothetical questions (would/is X likely): infer from documented behaviors.
 6. FACTS/claims are the primary answer evidence. ENTITIES and EPISODES are
    supporting summaries; use them to fill missing coverage, but do not let
@@ -426,7 +513,9 @@ Rules:
    first. Otherwise use Question Date + event_time fields. Always convert
    relative time references ("yesterday", "last week", "a few months ago")
    into specific dates, months, or years. Do not output unresolved relative
-   phrases.
+   phrases. If the question already names a month/year and asks what
+   happened in that period, answer the event itself; do not add a converted
+   date outside the named period unless the question asks when.
 8. Timestamps in memories represent the actual time the event occurred,
    NOT the time the event was mentioned in conversation. If a memory says
    "(event_time: 2023-03-15) I went to the vet yesterday" and the question

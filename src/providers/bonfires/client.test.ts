@@ -77,6 +77,115 @@ describe("BonfiresClient", () => {
     expect(body).toMatchObject({ bonfire_id: "bf-1", content: "hello world", title: "test-doc" });
   });
 
+  it("memoryKernelSearch posts FCG miss-learning controls", async () => {
+    const fetchMock = mock(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ evidence: [] }),
+      text: async () => "",
+    }));
+    const client = new BonfiresClient({
+      apiUrl: "http://localhost:8000",
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
+
+    await client.memoryKernelSearch({
+      bonfireId: "bf-1",
+      query: "where is the passport",
+      fcgPrecisionMissPolicy: "continue",
+      fcgMissLearningEnabled: true,
+      fcgLearningTopEvidenceK: 3,
+      fcgLearningAbstractSupportThreshold: 2,
+      fcgLearnedOverlayEnabled: true,
+      fcgLearnedOverlayMinScore: 0.45,
+    });
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("http://localhost:8000/search/memory-kernel");
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body).toMatchObject({
+      bonfire_id: "bf-1",
+      query: "where is the passport",
+      fcg_precision_miss_policy: "continue",
+      fcg_miss_learning_enabled: true,
+      fcg_learning_top_evidence_k: 3,
+      fcg_learning_abstract_support_threshold: 2,
+      fcg_learned_overlay_enabled: true,
+      fcg_learned_overlay_min_score: 0.45,
+    });
+  });
+
+  it("hypermemStackIndex posts stack messages to the memory-kernel index endpoint", async () => {
+    const client = new BonfiresClient({
+      apiUrl: "http://localhost:8000",
+      apiKey: "test-key",
+      fetchImpl: mock() as unknown as typeof fetch,
+    });
+    const reqWithCurl = mock(() => ({
+      success: true,
+      bonfire_id: "bf-1",
+      profile: "nlp_single_graph_v1",
+      diagnostics: {},
+    }));
+    (client as unknown as { reqWithCurl: typeof reqWithCurl }).reqWithCurl = reqWithCurl;
+
+    await client.hypermemStackIndex({
+      bonfireId: "bf-1",
+      profile: "nlp_single_graph_v1",
+      stackPayloads: [
+        {
+          batch_idx: 7,
+          batch_messages: [
+            {
+              id: "m-1",
+              text: "Caroline left the passport on the shelf.",
+              userId: "u-caroline",
+              chatId: "conv-26-s1",
+              sessionId: "conv-26-s1",
+              timestamp: "2026-01-01T00:00:00.000Z",
+              role: "user",
+              username: "Caroline",
+              metadata: { preserve_messages: true },
+            },
+          ],
+        },
+      ],
+      initialCandidates: 123,
+      useReranker: false,
+    });
+
+    const [method, path, body, opts] = reqWithCurl.mock.calls[0];
+    expect(method).toBe("POST");
+    expect(path).toBe("/search/memory-kernel/index");
+    expect(opts).toMatchObject({ timeoutMs: 7_200_000 });
+    expect(body).toMatchObject({
+      bonfire_id: "bf-1",
+      profile: "nlp_single_graph_v1",
+      message_batches: [
+        [
+          {
+            content: "Caroline left the passport on the shelf.",
+            speaker: "Caroline",
+            timestamp: "2026-01-01T00:00:00.000Z",
+            metadata: {
+              preserve_messages: true,
+              message_id: "m-1",
+              user_id: "u-caroline",
+              chat_id: "conv-26-s1",
+              role: "user",
+              session_id: "conv-26-s1",
+              batch_idx: 7,
+            },
+          },
+        ],
+      ],
+      config: {
+        initial_candidates: 123,
+        use_reranker: false,
+      },
+    });
+  });
+
   it("seedGrammar builds correct query-string URL", async () => {
     const fetchMock = mock(async () => ({
       ok: true,
