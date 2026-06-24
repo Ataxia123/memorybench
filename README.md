@@ -2,6 +2,8 @@
 
 A pluggable benchmarking framework for evaluating memory and context systems.
 
+> **Bonfires fork** of [supermemory](https://supermemory.ai)'s MemoryBench. This copy adds the `bonfires` provider — benchmarking Delve / MemoryKernel / HyperMem retrieval — alongside the upstream `supermemory`, `mem0`, `zep`, `rag`, and `filesystem` providers. The upstream framework and its MIT license are preserved (see [LICENSE](LICENSE)).
+
 <img width="3584" height="2154" alt="original" src="https://github.com/user-attachments/assets/7fe49b7e-ed0b-4861-92a5-fa5d199cfc72" />
 
 
@@ -77,7 +79,7 @@ GOOGLE_API_KEY=
 -b, --benchmark        Benchmark (locomo, longmemeval, convomem)
 -j, --judge            Judge model (gpt-4o, sonnet-4, gemini-2.5-flash, etc.)
 -r, --run-id           Run identifier (auto-generated if omitted)
--m, --answering-model  Model for answer generation (default: gpt-4o)
+-m, --answering-model  Model for answer generation (default: gpt-4.1-mini)
 -l, --limit            Limit number of questions
 -q, --question-id      Specific question (for test command)
 --force                Clear checkpoint and restart

@@ -15,12 +15,26 @@ Without these the answer phase fails with `Incorrect API key provided: ''`. Sear
 
 ## Bench-side env (for the bonfires provider)
 
+Current conv-26 MemoryKernel quality runs use the `hypermem` provider arm with
+the `memory-kernel` search endpoint. The name is historical: in this mode
+MemoryBench drains LoCoMo stack-shaped messages directly into
+`/search/memory-kernel/index` and searches `/search/memory-kernel`. It does not
+call `/agents/{id}/stack/add`, `/agents/{id}/stack/process`, or require the arq
+worker.
+
 ```bash
-BONFIRES_BONFIRE_ID="358c982d43841eaed6279261"  # The LoCoMo conv-26 bonfire
+BONFIRES_BONFIRE_ID="<descriptive-conv-26-run-id>"
 BONFIRES_API_URL="http://localhost:8000"
 BONFIRES_API_KEY="local-dev-api-key"
-BONFIRES_ARM="smart"                             # smart = facts + entities + chunks (the default mix)
+BONFIRES_ARM="hypermem"
+BONFIRES_SEARCH_ENDPOINT="memory-kernel"
+BONFIRES_HYPERMEM_DIRECT_INDEX=1
+BONFIRES_HYPERMEM_PROFILE="nlp_single_graph_v1"
 ```
+
+Do not use `BONFIRES_ARM=smart` for MemoryKernel conv-26 gate runs. `smart`
+routes through the Delve stack V2 path and queues stack processing. That is a
+different system under test and can block on arq worker state.
 
 ### Image caption ingest (Z9-A)
 
@@ -38,6 +52,30 @@ When set to `1`, `extractSessions` emits a second `UnifiedMessage` after each te
 20.8% of LoCoMo messages (1226/5882) carry captions. This is the Z9-A unlock for image-mediated adversarial questions. **Leave unset for baselines** — existing bench runs were ingested without captions and scores are not comparable across the toggle.
 
 ## Server-side env (set on the delve server, NOT on the bench)
+
+For MemoryKernel conv-26 runs, start the local server with the MemoryKernel
+source path first on `PYTHONPATH` and the same retrieval/indexing knobs used by
+the run:
+
+```bash
+cd /home/at0x/Vaults/Bonfires/delve/src
+UV_CACHE_DIR=/tmp/uv-cache \
+BONFIRES_GLINER_DEVICE=cuda \
+GLINER_DEVICE=cuda \
+HYPERMEM_FCG_STORE_DIR=/home/at0x/Vaults/Bonfires/data/fcg-store-conv26-gpu \
+HYPERMEM_NLP_QUEUE_SUMMARY_MODE=procedural \
+HYPERMEM_NLP_NORMALIZATION_MODE=per_message \
+HYPERMEM_GRAMMAR_STATEMENT_CENTROIDS=0 \
+PYTHONPATH=/home/at0x/Vaults/Bonfires/memory_kernel/src:/home/at0x/Vaults/Bonfires/delve/src \
+uv run uvicorn server:app --host 0.0.0.0 --port 8000
+```
+
+`HYPERMEM_BOUNDARY_MODE` is normally left unset; for
+`nlp_single_graph_v1`/`nlp_taxonomy_v1` this means
+`centroid_timestamp` episode boundary splitting. Keep
+`HYPERMEM_GRAMMAR_STATEMENT_CENTROIDS=0` unless the run is explicitly testing
+grammar statement centroid salience, because enabling it changes ingest shape
+and latency.
 
 The chunks_search aux lanes / gates are gated by env vars on the **delve server**, not on bun. To change them you have to restart delve:
 
@@ -74,17 +112,35 @@ disown
 cd /home/at0x/Vaults/Bonfires/memorybench
 OPENAI_API_KEY="$OPENROUTER_API_KEY" \
 OPENAI_BASE_URL="https://openrouter.ai/api/v1" \
-BONFIRES_BONFIRE_ID="358c982d43841eaed6279261" \
+BONFIRES_BONFIRE_ID="<descriptive-conv-26-run-id>" \
 BONFIRES_API_URL="http://localhost:8000" \
 BONFIRES_API_KEY="local-dev-api-key" \
-BONFIRES_ARM="smart" \
+BONFIRES_ARM="hypermem" \
+BONFIRES_SEARCH_ENDPOINT="memory-kernel" \
+BONFIRES_HYPERMEM_DIRECT_INDEX=1 \
+BONFIRES_HYPERMEM_PROFILE="nlp_single_graph_v1" \
+LOCOMO_CONV="conv-26" \
 bun run src/index.ts run \
   --provider bonfires --benchmark locomo \
   --run-id "<descriptive-id>" \
-  --limit 199 \
+  --limit 9999 \
   --concurrency 5 \
   --force
 ```
+
+Expected indexing log for the current path:
+
+```text
+Sampling selected 199 questions from 1986 total
+hypermem direct stack index: draining <N> messages across <M> sessions
+```
+
+`LOCOMO_CONV` only takes effect through the sampling path. Keep `--limit 9999`
+for conv-only runs; using `LOCOMO_CONV` without `--limit`, `--sample`, or
+`--questions` will run all LoCoMo questions.
+
+If you see `stack V2: pushing ... to one stack`, the run is on the wrong arm
+for MemoryKernel quality work.
 
 `--concurrency 5` is the default the previous successful runs used. **A/B comparisons must use the same concurrency** — queries serialize on the single-threaded delve server and per-search latency rises 3–5× under contention. Sequential vs concurrent reports give misleadingly different "search latency" numbers (apparent 3× regression that's purely a measurement artifact).
 
@@ -106,7 +162,7 @@ bun run src/index.ts run --provider bonfires --benchmark locomo \
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **memorybench** (3350 symbols, 6582 relationships, 280 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **memorybench** (3420 symbols, 6690 relationships, 282 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 

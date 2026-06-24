@@ -171,13 +171,28 @@ function compactAnswerCandidateList(value: unknown): Record<string, unknown>[] {
       (item): item is Record<string, unknown> =>
         Boolean(item) && typeof item === "object" && !Array.isArray(item)
     )
-    .slice(0, 5)
+    .slice(0, 8)
     .map(compactAnswerCandidate)
 }
 
 function compactAnswerCandidate(candidate: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {}
-  for (const key of ["family", "kind", "status", "confidence", "completeness"]) {
+  for (const key of [
+    "family",
+    "kind",
+    "status",
+    "confidence",
+    "completeness",
+    "text",
+    "answer_kind",
+    "source_candidate_id",
+    "source_rank",
+    "statement_id",
+    "answer_role",
+    "source_family",
+    "source_message_id",
+    "evidence_tier",
+  ]) {
     const value = candidate[key]
     if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
       out[key] = value
@@ -260,24 +275,40 @@ function parseEnvCsv(name: string): string[] {
 
 function memoryKernelHits(result: MemoryKernelSearchResult): SearchHit[] {
   const hits: SearchHit[] = []
-  for (const item of result.evidence ?? []) {
+  const evidence = result.evidence ?? []
+  const diagnostics = result.diagnostics ?? {}
+  const answerCandidates = compactAnswerCandidateList(diagnostics.answer_candidates)
+  for (let index = 0; index < evidence.length; index++) {
+    const item = evidence[index]
     const text = String(item.text ?? "").trim()
     if (!text) continue
     const family = String(item.family ?? "construct_occurrence")
+    const kernelMetadata: Record<string, unknown> = {
+      candidate_id: item.candidate_id,
+      family,
+      source_ids: item.source_ids ?? [],
+      metadata: item.metadata ?? {},
+    }
+    if (index === 0 && result.context_packet) {
+      kernelMetadata.context_packet = result.context_packet
+    }
+    if (index === 0 && answerCandidates.length > 0) {
+      kernelMetadata.answer_candidates = answerCandidates
+    }
     hits.push({
       text: `[${family.toUpperCase()}] ${humanizeDatesInText(text)}`,
       score: item.score ?? null,
       kind: family === "episode_manifest" ? "episode" : "fact",
       metadata: {
         source: item.source ?? "memory-kernel",
-        memory_kernel: {
-          candidate_id: item.candidate_id,
-          family,
-          source_ids: item.source_ids ?? [],
-          metadata: item.metadata ?? {},
-          diagnostics: result.diagnostics ?? {},
-        },
+        memory_kernel: kernelMetadata,
       },
+    })
+  }
+  if (Object.keys(diagnostics).length > 0) {
+    Object.defineProperty(hits, "diagnostics", {
+      value: { memory_kernel: diagnostics },
+      enumerable: false,
     })
   }
   return hits
@@ -680,12 +711,28 @@ export async function armSearch(args: {
             hydrateGraph: parseEnvBool("BONFIRES_MEMORY_KERNEL_HYDRATE_GRAPH", true),
             embedQuery: parseEnvBool("BONFIRES_MEMORY_KERNEL_EMBED_QUERY", true),
             surfaceFamilies: parseEnvCsv("BONFIRES_MEMORY_KERNEL_SURFACE_FAMILIES"),
+            cxnLibraryProfile: process.env.BONFIRES_MEMORY_KERNEL_CXN_LIBRARY_PROFILE,
+            cxnRecipePreselectLimit:
+              process.env.BONFIRES_MEMORY_KERNEL_CXN_RECIPE_PRESELECT_LIMIT === undefined
+                ? undefined
+                : parseEnvInt("BONFIRES_MEMORY_KERNEL_CXN_RECIPE_PRESELECT_LIMIT", 1000),
+            cxnRecipePreselectMinScore:
+              process.env.BONFIRES_MEMORY_KERNEL_CXN_RECIPE_PRESELECT_MIN_SCORE === undefined
+                ? undefined
+                : parseEnvFloat("BONFIRES_MEMORY_KERNEL_CXN_RECIPE_PRESELECT_MIN_SCORE", 0),
+            fcgTopicTopK: parseEnvInt("BONFIRES_MEMORY_KERNEL_FCG_TOPIC_TOP_K", 8),
+            fcgComprehensionAttemptLimit: parseEnvInt(
+              "BONFIRES_MEMORY_KERNEL_FCG_COMPREHENSION_ATTEMPT_LIMIT",
+              3
+            ),
+            fcgTopicSimilarityThreshold: parseEnvFloat(
+              "BONFIRES_MEMORY_KERNEL_FCG_TOPIC_SIMILARITY_THRESHOLD",
+              0.3
+            ),
+            fcgGrammarCacheSize: parseEnvInt("BONFIRES_MEMORY_KERNEL_FCG_GRAMMAR_CACHE_SIZE", 4),
             fcgPrecisionMissPolicy:
               process.env.BONFIRES_MEMORY_KERNEL_FCG_PRECISION_MISS_POLICY ?? "continue",
-            fcgMissLearningEnabled: parseEnvBool(
-              "BONFIRES_MEMORY_KERNEL_FCG_MISS_LEARNING",
-              false
-            ),
+            fcgMissLearningEnabled: parseEnvBool("BONFIRES_MEMORY_KERNEL_FCG_MISS_LEARNING", true),
             fcgLearningTopEvidenceK: parseEnvInt(
               "BONFIRES_MEMORY_KERNEL_FCG_LEARNING_TOP_EVIDENCE_K",
               3
@@ -696,12 +743,28 @@ export async function armSearch(args: {
             ),
             fcgLearnedOverlayEnabled: parseEnvBool(
               "BONFIRES_MEMORY_KERNEL_FCG_LEARNED_OVERLAY",
-              false
+              true
             ),
             fcgLearnedOverlayMinScore: parseEnvFloat(
               "BONFIRES_MEMORY_KERNEL_FCG_LEARNED_OVERLAY_MIN_SCORE",
               0.45
             ),
+            ...(process.env.BONFIRES_MEMORY_KERNEL_ECS_SEARCH_ENABLED === undefined
+              ? {}
+              : {
+                  ecsSearchEnabled: parseEnvBool(
+                    "BONFIRES_MEMORY_KERNEL_ECS_SEARCH_ENABLED",
+                    false
+                  ),
+                }),
+            ...(process.env.BONFIRES_MEMORY_KERNEL_CONTEXT_PACKET === undefined
+              ? {}
+              : {
+                  contextPacketEnabled: parseEnvBool(
+                    "BONFIRES_MEMORY_KERNEL_CONTEXT_PACKET",
+                    false
+                  ),
+                }),
           })
           return memoryKernelHits(r)
         }
@@ -1108,12 +1171,8 @@ export async function armSearch(args: {
           : undefined
 
         // Fire node+edge+vector concurrently. Vector adds per-message
-        // recall that graphiti's entity/edge extraction may have missed
-        // (property-style facts like "Caroline is single"). 5 chunks
-        // is the empirical sweet spot on LoCoMo conv-26: v21 hit 60.3%
-        // (v12 baseline = 58.29%) with 20 facts + 20 entities + 5 vec.
-        // Mixing in episodes (v23) added noise on multi-hop and
-        // hallucinations on adversarial — reverted.
+        // recall that entity/edge extraction may have missed, while keeping
+        // the vector lane small enough not to drown fact and entity evidence.
         const [nodeRes, edgeRes, vectorRes] = await Promise.all([
           client.kgDelve({
             bonfireId: config.bonfireId,
@@ -1506,17 +1565,16 @@ export async function armSearch(args: {
         const useChunkAsKgQuery = process.env.BONFIRES_KG_QUERY_FROM_CHUNK === "1"
         // Fan-out mode: run kgDelve TWICE — once with the raw query, once with
         // the chunk-seeded enriched query — and merge their entities/edges
-        // (dedupe by uuid/fact) before passing to the answer pool. Spot tests
-        // showed raw wins narrow-intent (q3 "Caroline research") and enriched
-        // wins broad/list (q19 "Melanie's kids likes"); the union catches both.
+        // (dedupe by uuid/fact) before passing to the answer pool. This keeps
+        // narrow-intent recall while adding coverage for broad/list queries.
         // Mutually exclusive with useChunkAsKgQuery (the legacy enriched-only path).
         const kgseedFanout = process.env.BONFIRES_KGSEED_FANOUT === "1"
         // Enriched-only mode (v31): use enriched query for the single kgDelve,
         // but cheap-protect against off-topic seeds via entity-overlap gating.
         // If the seed chunk's metadata.entities (GLiNER spans) have ZERO overlap
-        // with the question's noun tokens, the seed is high-cosine but off-topic
-        // (q3 "Caroline research" → seed was Melanie/pottery) — fall back to raw
-        // query. Pure metadata check, no API call. Mutex with fan-out.
+        // with the question's noun tokens, the seed is high-cosine but off-topic;
+        // fall back to raw query. Pure metadata check, no API call. Mutex with
+        // fan-out.
         const kgseedOnly = process.env.BONFIRES_KGSEED_ONLY === "1"
         let chunkHits: Awaited<ReturnType<typeof client.chunksSearch>> = []
         let kgQuery = query
@@ -1886,6 +1944,13 @@ export async function armSearch(args: {
     }
   } catch (err) {
     console.error(`bonfires search (${config.arm}) failed:`, err)
+    const endpoint = (process.env.BONFIRES_SEARCH_ENDPOINT ?? "hypermem")
+      .trim()
+      .toLowerCase()
+      .replace("_", "-")
+    if (config.arm === "hypermem" && endpoint === "memory-kernel") {
+      throw err
+    }
     return []
   }
 }

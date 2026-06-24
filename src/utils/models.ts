@@ -227,9 +227,9 @@ export const MODEL_CONFIGS: Record<string, ModelConfig> = {
   },
 }
 
-export const DEFAULT_ANSWERING_MODEL = "gpt-4o"
+export const DEFAULT_ANSWERING_MODEL = "gpt-4.1-mini"
 export const DEFAULT_JUDGE_MODELS: Record<string, string> = {
-  openai: "gpt-4o",
+  openai: "gpt-4.1-mini",
   anthropic: "sonnet-4",
   google: "gemini-2.5-flash",
 }

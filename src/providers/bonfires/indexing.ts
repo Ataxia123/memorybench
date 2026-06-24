@@ -59,7 +59,7 @@ export function stackMessagesForSession(
   const base = referenceTime ? Date.parse(referenceTime) : Date.now()
   const msgs = session.messages as UnifiedMessage[]
   return msgs.map((m, i) => {
-    const metadata = {
+    const metadata: Record<string, unknown> = {
       ...(m.metadata ?? {}),
       preserve_messages: true,
     }
@@ -168,7 +168,7 @@ export async function runIndexingPipeline(args: {
   //      Phase C (FIFO Graphiti add_episode with update_communities=True)
   //   4. (still external for now) buildOntology final pass — moves
   //      inside delve once the lazy ontology→community link lands.
-  // Server must have STACK_V2_ENABLED=1 for this to behave correctly.
+  // Delve defaults STACK_V2_ENABLED=1; explicit STACK_V2_ENABLED=0 is an opt-out.
   // Default-on; opt out via BONFIRES_STACK_V2=0. STACK_V2 + NO_DOC together
   // route ingestion through delve's _process_stack_background which runs
   // Phase A (per-session label+synth) → Phase B (rebuild+cascade) → Phase C
@@ -370,7 +370,10 @@ export async function runIndexingPipeline(args: {
         batch_idx: stackPayloads.length,
       })
     }
-    if (process.env.BONFIRES_ARM === "hypermem" && process.env.BONFIRES_HYPERMEM_DIRECT_INDEX !== "0") {
+    if (
+      process.env.BONFIRES_ARM === "hypermem" &&
+      process.env.BONFIRES_HYPERMEM_DIRECT_INDEX !== "0"
+    ) {
       console.log(
         `hypermem direct stack index: draining ${allStackMessages.length} messages across ${stackPayloads.length} sessions`
       )

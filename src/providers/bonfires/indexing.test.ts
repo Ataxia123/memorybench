@@ -11,6 +11,8 @@ const previousCascadeEmbeddings = process.env.BONFIRES_CASCADE_EMBEDDINGS
 const previousTier4Seed = process.env.BONFIRES_TIER4_SEED
 const previousSkipEpisodes = process.env.BONFIRES_SKIP_EPISODES
 const previousSkipBuildGrammar = process.env.BONFIRES_SKIP_BUILD_GRAMMAR
+const previousArm = process.env.BONFIRES_ARM
+const previousDirectIndex = process.env.BONFIRES_HYPERMEM_DIRECT_INDEX
 
 afterEach(() => {
   restoreEnv("LOCOMO_INCLUDE_IMAGE_CAPTIONS", previousCaptionFlag)
@@ -21,6 +23,8 @@ afterEach(() => {
   restoreEnv("BONFIRES_TIER4_SEED", previousTier4Seed)
   restoreEnv("BONFIRES_SKIP_EPISODES", previousSkipEpisodes)
   restoreEnv("BONFIRES_SKIP_BUILD_GRAMMAR", previousSkipBuildGrammar)
+  restoreEnv("BONFIRES_ARM", previousArm)
+  restoreEnv("BONFIRES_HYPERMEM_DIRECT_INDEX", previousDirectIndex)
 })
 
 function restoreEnv(name: string, value: string | undefined): void {
@@ -106,6 +110,49 @@ describe("runIndexingPipeline", () => {
       "buildCommunities",
       "buildOntology",
     ])
+  })
+
+  test("direct hypermem stack index sends the full selected session payload", async () => {
+    process.env.BONFIRES_STACK_V2 = "1"
+    process.env.BONFIRES_STACK_V2_NO_DOC = "1"
+    process.env.BONFIRES_ARM = "hypermem"
+    process.env.BONFIRES_HYPERMEM_DIRECT_INDEX = "1"
+
+    const client = {
+      hypermemStackIndex: mock(async () => ({})),
+    }
+    const sessions: UnifiedSession[] = [
+      {
+        sessionId: "session-1",
+        metadata: { date: "2026-06-09T00:00:00.000Z" },
+        messages: [
+          { role: "user", speaker: "Ava", content: "first" },
+          { role: "assistant", speaker: "Ben", content: "second" },
+          { role: "user", speaker: "Ava", content: "third" },
+        ],
+      },
+      {
+        sessionId: "session-2",
+        metadata: { date: "2026-06-09T00:10:00.000Z" },
+        messages: [{ role: "user", speaker: "Ava", content: "fourth" }],
+      },
+    ]
+
+    await runIndexingPipeline({
+      client: client as unknown as Parameters<typeof runIndexingPipeline>[0]["client"],
+      agentId: "agent-1",
+      bonfireId: "bf-1",
+      sessions,
+    })
+
+    expect(client.hypermemStackIndex).toHaveBeenCalledTimes(1)
+    const [args] = client.hypermemStackIndex.mock.calls[0] as unknown as [
+      { stackPayloads: Array<{ batch_messages: Array<{ text: string }> }> },
+    ]
+    expect(args.stackPayloads).toHaveLength(2)
+    expect(
+      args.stackPayloads.flatMap((payload) => payload.batch_messages.map((message) => message.text))
+    ).toEqual(["first", "second", "third", "fourth"])
   })
 })
 
@@ -261,9 +308,7 @@ describe("LoCoMo image caption ingestion", () => {
     const emptyMessages = session8!.messages.filter((m) => !m.content?.trim())
     expect(emptyMessages).toHaveLength(0)
 
-    const captionMessage = session8!.messages.find((m) =>
-      m.content.includes("cup with a dog face")
-    )
+    const captionMessage = session8!.messages.find((m) => m.content.includes("cup with a dog face"))
     expect(captionMessage?.metadata?.source_kind).toBe("image_context")
     expect(captionMessage?.metadata?.source_message_id).toBe("conv-26-session_8-m3")
     expect(captionMessage?.metadata?.parent_source_message_id).toBe("conv-26-session_8-m3")

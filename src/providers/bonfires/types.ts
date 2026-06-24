@@ -178,6 +178,25 @@ export interface MemoryKernelSearchResult {
   }>
   candidate_count?: number
   surface_query_count?: number
+  context_packet?: {
+    sections?: Array<{
+      name?: string
+      role?: string
+      evidence?: Array<{
+        candidate_id?: string
+        role?: string
+        rank?: number
+        score?: number
+        source_ids?: string[]
+        statement_ids?: string[]
+        episode_ids?: string[]
+        source_message_ids?: string[]
+        metadata?: Record<string, unknown>
+      }>
+      metadata?: Record<string, unknown>
+    }>
+    metadata?: Record<string, unknown>
+  }
   diagnostics?: Record<string, unknown>
 }
 

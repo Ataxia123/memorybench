@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs"
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs"
 import { dirname } from "path"
 import type {
   Provider,
@@ -16,11 +16,18 @@ import { ingestSessions } from "./ingest.js"
 import { runIndexingPipeline } from "./indexing.js"
 import type { SearchHit } from "./search.js"
 
+const DEFAULT_RANKED_CONTEXT_TOKEN_BUDGET = 5600
+const MIN_BUDGETED_CONTEXT_LINES = 4
+const APPROX_CHARS_PER_TOKEN = 4
+
 // Zep-style answer prompt — mirrors zep-papers/locomo_eval/zep_locomo_search.py
 // TEMPLATE + their dedicated FACTS/ENTITIES split. GPT-4o reads the tagged
 // sections cleaner than our flat JSON default, which was leaking JSON
 // punctuation noise into the attention budget.
 function buildZepContextString(context: unknown[]): string {
+  const answerCandidates = buildMemoryKernelAnswerCandidateString(context)
+  const packet = buildMemoryKernelContextPacketString(context, answerCandidates)
+  if (packet) return joinContextSections(answerCandidates, packet)
   const hits = context as SearchHit[]
   const facts: string[] = []
   const entities: string[] = []
@@ -53,7 +60,7 @@ function buildZepContextString(context: unknown[]): string {
   if (episodes.length) parts.push(`<EPISODES>\n${episodes.join("\n")}\n</EPISODES>`)
   if (communities.length) parts.push(`<COMMUNITIES>\n${communities.join("\n")}\n</COMMUNITIES>`)
   if (other.length) parts.push(`<CONTEXT>\n${other.join("\n")}\n</CONTEXT>`)
-  return parts.join("\n\n")
+  return joinContextSections(answerCandidates, parts.join("\n\n"))
 }
 
 // STRUCTURED_PROMPTS — groups hits by kind with XML-ish section headers so
@@ -64,6 +71,9 @@ function buildZepContextString(context: unknown[]): string {
 // ("I don't know") is reserved for the zero-relevant-info case — adversarial
 // trick questions are treated as a control bucket, not the optimization target.
 function buildStructuredContextString(context: unknown[]): string {
+  const answerCandidates = buildMemoryKernelAnswerCandidateString(context)
+  const packet = buildMemoryKernelContextPacketString(context, answerCandidates)
+  if (packet) return joinContextSections(answerCandidates, packet)
   const hits = context as SearchHit[]
   const chunks: string[] = []
   const facts: string[] = []
@@ -102,7 +112,7 @@ function buildStructuredContextString(context: unknown[]): string {
   if (episodes.length) parts.push(`<EPISODES>\n${episodes.join("\n")}\n</EPISODES>`)
   if (communities.length) parts.push(`<COMMUNITIES>\n${communities.join("\n")}\n</COMMUNITIES>`)
   if (other.length) parts.push(`<OTHER>\n${other.join("\n")}\n</OTHER>`)
-  return parts.join("\n\n")
+  return joinContextSections(answerCandidates, parts.join("\n\n"))
 }
 
 // RANKED_PROMPTS — flat numbered list in cross-encoder rerank order, no
@@ -112,14 +122,194 @@ function buildStructuredContextString(context: unknown[]): string {
 // section-grouping destroys (a fact at rerank rank 1 was the most
 // relevant evidence even if 9 chunks are present in the pool).
 function buildRankedContextString(context: unknown[]): string {
+  const answerCandidates = buildMemoryKernelAnswerCandidateString(context)
+  const packet = buildMemoryKernelContextPacketString(context, answerCandidates)
+  if (packet) return joinContextSections(answerCandidates, packet)
   const hits = context as SearchHit[]
   const lines: string[] = []
+  const budget = rankedContextTokenBudget()
+  let usedTokens = estimatePromptTokens(answerCandidates)
   for (let i = 0; i < hits.length; i++) {
     const h = hits[i]
     if (!h?.text) continue
-    lines.push(`${i + 1}. ${renderSearchHitForPrompt(h)}`)
+    const line = `${i + 1}. ${renderSearchHitForPrompt(h)}`
+    const remainingTokens = budget - usedTokens
+    if (remainingTokens <= 0 && lines.length >= MIN_BUDGETED_CONTEXT_LINES) break
+
+    let renderedLine = line
+    let lineTokens = estimatePromptTokens(line)
+    if (usedTokens + lineTokens > budget) {
+      if (lines.length >= MIN_BUDGETED_CONTEXT_LINES) break
+      renderedLine = sentenceBounded(line, Math.max(remainingTokens, 160) * APPROX_CHARS_PER_TOKEN)
+      lineTokens = estimatePromptTokens(renderedLine)
+    }
+
+    lines.push(renderedLine)
+    usedTokens += lineTokens
   }
-  return lines.join("\n")
+  return joinContextSections(answerCandidates, lines.join("\n"))
+}
+
+function joinContextSections(...sections: string[]): string {
+  return sections
+    .map((section) => section.trim())
+    .filter(Boolean)
+    .join("\n\n")
+}
+
+function rankedContextTokenBudget(): number {
+  const raw =
+    process.env.BONFIRES_MEMORYBENCH_CONTEXT_TOKEN_BUDGET ??
+    process.env.BONFIRES_CONTEXT_TOKEN_BUDGET
+  const parsed = raw ? Number.parseInt(raw, 10) : DEFAULT_RANKED_CONTEXT_TOKEN_BUDGET
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_RANKED_CONTEXT_TOKEN_BUDGET
+  return Math.max(1200, Math.min(parsed, 12000))
+}
+
+function estimatePromptTokens(value: string): number {
+  if (!value) return 0
+  return Math.ceil(value.length / APPROX_CHARS_PER_TOKEN)
+}
+
+function buildMemoryKernelContextPacketString(context: unknown[], reservedContext = ""): string {
+  const hits = context as SearchHit[]
+  const packet = findMemoryKernelContextPacket(hits)
+  if (!packet) return ""
+  const budget = rankedContextTokenBudget()
+  let usedTokens = estimatePromptTokens(reservedContext)
+  const evidenceById = new Map<string, SearchHit>()
+  for (const hit of hits) {
+    const kernel = objectValue(hit.metadata?.memory_kernel)
+    const candidateId = typeof kernel.candidate_id === "string" ? kernel.candidate_id : ""
+    if (candidateId) evidenceById.set(candidateId, hit)
+  }
+
+  const sections = arrayValue(packet.sections)
+  const renderedSections: string[] = []
+  for (const section of sections) {
+    const sectionRecord = objectValue(section)
+    const name = typeof sectionRecord.name === "string" ? sectionRecord.name : ""
+    const evidence = arrayValue(sectionRecord.evidence)
+      .map(objectValue)
+      .filter((ref) => typeof ref.candidate_id === "string" && evidenceById.has(ref.candidate_id))
+      .sort((a, b) => numericValue(a.rank) - numericValue(b.rank))
+    if (!name || evidence.length === 0) continue
+    const lines: string[] = []
+    for (const ref of evidence) {
+      const remainingTokens = budget - usedTokens
+      if (remainingTokens <= 80) break
+      const candidateId = String(ref.candidate_id)
+      const hit = evidenceById.get(candidateId)
+      if (!hit) continue
+      const role = typeof ref.role === "string" ? ref.role : ""
+      const rank = numericValue(ref.rank)
+      const score = typeof ref.score === "number" ? ` score=${ref.score.toFixed(4)}` : ""
+      const labels = [`id=${candidateId}`, `rank=${rank}`]
+      if (role) labels.push(`role=${role}`)
+      let line = `  - [${labels.join(" ")}${score}] ${renderSearchHitForPrompt(hit)}`
+      let lineTokens = estimatePromptTokens(line)
+      if (usedTokens + lineTokens > budget) {
+        line = sentenceBounded(line, Math.max(remainingTokens, 160) * APPROX_CHARS_PER_TOKEN)
+        lineTokens = estimatePromptTokens(line)
+      }
+      lines.push(line)
+      usedTokens += lineTokens
+    }
+    if (lines.length > 0) {
+      renderedSections.push(
+        `<${packetSectionTag(name)}>\n${lines.join("\n")}\n</${packetSectionTag(name)}>`
+      )
+    }
+    if (budget - usedTokens <= 80) break
+  }
+  return renderedSections.join("\n\n")
+}
+
+function findMemoryKernelContextPacket(hits: SearchHit[]): Record<string, unknown> | null {
+  for (const hit of hits) {
+    const kernel = objectValue(hit.metadata?.memory_kernel)
+    const packet = objectValue(kernel.context_packet)
+    if (Object.keys(packet).length > 0 && arrayValue(packet.sections).length > 0) return packet
+  }
+  return null
+}
+
+function buildMemoryKernelAnswerCandidateString(context: unknown[]): string {
+  const candidates = findMemoryKernelAnswerCandidates(context as SearchHit[])
+  if (candidates.length === 0) return ""
+  const lines = candidates.slice(0, 8).map((candidate, index) => {
+    const text = sentenceBounded(candidateText(candidate), 480)
+    const labels = [
+      `candidate_rank=${index + 1}`,
+      labelValue("answer_kind", candidate.answer_kind),
+      labelValue("answer_role", candidate.answer_role),
+      labelValue("evidence_rank", candidate.source_rank),
+      labelValue("statement", candidate.statement_id),
+      labelValue("source", candidate.source_candidate_id),
+      labelValue("confidence", candidate.confidence),
+    ].filter(Boolean)
+    return `  - [${labels.join(" ")}] ${text}`
+  })
+  return `<ANSWER_CANDIDATES>\n${lines.join("\n")}\n</ANSWER_CANDIDATES>`
+}
+
+function buildMemoryKernelAnswerCandidatePriorityString(context: unknown[]): string {
+  const candidates = findMemoryKernelAnswerCandidates(context as SearchHit[])
+  if (candidates.length === 0) return ""
+  const lines = candidates.slice(0, 4).map((candidate, index) => {
+    const text = sentenceBounded(candidateText(candidate), 320)
+    const role = labelValue("answer_role", candidate.answer_role)
+    const kind = labelValue("answer_kind", candidate.answer_kind)
+    const labels = [`candidate_rank=${index + 1}`, kind, role].filter(Boolean)
+    return `  - [${labels.join(" ")}] ${text}`
+  })
+  return [
+    "Kernel answer candidate priority:",
+    "Copy the first candidate whose role answers the question. Treat raw evidence as provenance unless no candidate is compatible.",
+    ...lines,
+  ].join("\n")
+}
+
+function findMemoryKernelAnswerCandidates(hits: SearchHit[]): Record<string, unknown>[] {
+  for (const hit of hits) {
+    const kernel = objectValue(hit.metadata?.memory_kernel)
+    const candidates = arrayValue(kernel.answer_candidates)
+      .map(objectValue)
+      .filter((candidate) => candidateText(candidate).length > 0)
+    if (candidates.length > 0) return candidates
+  }
+  return []
+}
+
+function candidateText(candidate: Record<string, unknown>): string {
+  for (const key of ["text", "value", "answer", "normalized_value"]) {
+    const value = candidate[key]
+    if (typeof value === "string" && value.trim()) return value.trim()
+    if (typeof value === "number" || typeof value === "boolean") return String(value)
+  }
+  return ""
+}
+
+function labelValue(name: string, value: unknown): string {
+  if (typeof value === "string" && value.trim()) return `${name}=${quoteLabel(value.trim())}`
+  if (typeof value === "number" && Number.isFinite(value)) return `${name}=${value}`
+  if (typeof value === "boolean") return `${name}=${value}`
+  return ""
+}
+
+function quoteLabel(value: string): string {
+  return /^[A-Za-z0-9_.:-]+$/.test(value) ? value : JSON.stringify(value)
+}
+
+function packetSectionTag(name: string): string {
+  return name
+    .replace(/[^A-Za-z0-9_]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .toUpperCase()
+}
+
+function numericValue(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : Number.MAX_SAFE_INTEGER
 }
 
 function renderSearchHitForPrompt(hit: SearchHit): string {
@@ -129,11 +319,18 @@ function renderSearchHitForPrompt(hit: SearchHit): string {
     const memoryKernel = buildMemoryKernelContextBlock(hit)
     if (memoryKernel) return memoryKernel
   }
-  return hit.text
+  return annotateSpeakerTaggedEvidence(hit.text)
 }
 
 function memoryKernelCompactContextEnabled(): boolean {
   return process.env.BONFIRES_MEMORY_KERNEL_COMPACT_CONTEXT === "1"
+}
+
+function annotateSpeakerTaggedEvidence(text: string): string {
+  return String(text || "").replace(
+    /^\[(STATEMENT|STATEMENT_FROM_CONSTRUCT|INDEX_DOC)\]\s+([A-Z][A-Za-z0-9_'’-]{1,40}):\s+/,
+    "[$1 speaker=$2] $2: "
+  )
 }
 
 function buildDelvePayloadContextBlock(hit: SearchHit): string {
@@ -143,7 +340,9 @@ function buildDelvePayloadContextBlock(hit: SearchHit): string {
     return `[Delve HyperMem Context]\n${hit.text}`
   }
   try {
-    return renderDelvePayloadForPrompt(compactDelvePayloadForPrompt(payload as Record<string, unknown>))
+    return renderDelvePayloadForPrompt(
+      compactDelvePayloadForPrompt(payload as Record<string, unknown>)
+    )
   } catch {
     return `[Delve HyperMem Context]\n${hit.text}`
   }
@@ -156,14 +355,19 @@ function buildMemoryKernelContextBlock(hit: SearchHit): string {
   const metadata = objectValue(kernel.metadata)
   const family = typeof kernel.family === "string" ? kernel.family : hit.kind || "fact"
   const sourceKind = typeof metadata.source_kind === "string" ? metadata.source_kind : ""
-  const anchor = typeof metadata.evidence_anchor_type === "string" ? metadata.evidence_anchor_type : ""
+  const anchor =
+    typeof metadata.evidence_anchor_type === "string" ? metadata.evidence_anchor_type : ""
   const timestamp = typeof metadata.timestamp === "string" ? metadata.timestamp : ""
+  const temporalScope = objectValue(metadata.answer_temporal_scope)
+  const temporalScopeSurface =
+    typeof temporalScope.surface === "string" ? temporalScope.surface : ""
   const statementId = typeof metadata.statement_id === "string" ? metadata.statement_id : ""
 
   const labels = [`family=${family}`]
   if (sourceKind) labels.push(`source=${sourceKind}`)
   if (anchor) labels.push(`anchor=${anchor}`)
   if (timestamp) labels.push(`date=${timestamp}`)
+  if (temporalScopeSurface) labels.push(`date_scope="${temporalScopeSurface}"`)
   if (statementId) labels.push(`statement=${statementId}`)
 
   return `[MemoryKernel ${labels.join(" ")}] ${compactMemoryKernelText(hit.text)}`
@@ -209,7 +413,10 @@ function stripGeneratedRetrievalTail(value: string): string {
     const index = value.indexOf(marker)
     if (index >= 0) end = Math.min(end, index)
   }
-  return value.slice(0, end).replace(/\s{2,}/g, " ").trim()
+  return value
+    .slice(0, end)
+    .replace(/\s{2,}/g, " ")
+    .trim()
 }
 
 function sentenceBounded(value: string, maxChars: number): string {
@@ -256,13 +463,28 @@ function compactAnswerCandidateList(value: unknown): Record<string, unknown>[] {
       (item): item is Record<string, unknown> =>
         Boolean(item) && typeof item === "object" && !Array.isArray(item)
     )
-    .slice(0, 5)
+    .slice(0, 8)
     .map(compactAnswerCandidate)
 }
 
 function compactAnswerCandidate(candidate: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {}
-  for (const key of ["family", "kind", "status", "confidence", "completeness"]) {
+  for (const key of [
+    "family",
+    "kind",
+    "status",
+    "confidence",
+    "completeness",
+    "text",
+    "answer_kind",
+    "source_candidate_id",
+    "source_rank",
+    "statement_id",
+    "answer_role",
+    "source_family",
+    "source_message_id",
+    "evidence_tier",
+  ]) {
     const value = candidate[key]
     if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
       out[key] = value
@@ -327,6 +549,7 @@ export function buildExtractiveContextString(context: unknown[]): string {
 export const EXTRACTIVE_PROMPTS: ProviderPrompts = {
   answerPrompt: (question, context, questionDate) => {
     const contextStr = buildExtractiveContextString(context)
+    const candidatePriority = buildMemoryKernelAnswerCandidatePriorityString(context)
     return `Answer the question using only the ranked context below.
 
 Context (ranked by relevance; keep this order):
@@ -339,45 +562,63 @@ Rules:
 1. Return the shortest exact answer supported by the context. No explanation.
 2. When a Delve HyperMem payload is present, treat it as the authoritative
    retrieval result. Use its rendered context as the available evidence.
-3. For list or set questions, scan all relevant FACT/claim lines and return
+3. When <ANSWER_CANDIDATES> is present, treat it as the kernel-selected
+   answer packet. candidate_rank order is authoritative inside that packet;
+   evidence_rank is only provenance. Answer from the lowest candidate_rank
+   compatible with the question before raw evidence. Use raw evidence only to
+   support or disambiguate that packet; do not merge in lower-ranked raw
+   evidence that answers a different event phase, role, owner, or relation.
+4. For list or set questions, scan all relevant FACT/claim lines and return
    the union of distinct supported candidates. Do not stop at the first
    matching line. Use ranked context order only to resolve direct conflicts,
    not to drop additional compatible items.
-4. Prefer exact FACT/claim wording over broad entity or episode summaries.
-5. Ignore answer_hint lines unless there is no factual evidence.
-6. For list questions, separate candidates with commas. Do not collapse
+5. Prefer exact FACT/claim wording over broad entity or episode summaries.
+6. Ignore answer_hint lines unless there is no factual evidence.
+7. For list questions, separate candidates with commas. Do not collapse
    multiple candidates into one broad category.
-7. For date questions, use any "[resolved relative time: ...]" annotation
+8. For date questions, use any "[resolved relative time: ...]" annotation
    before raw words like "yesterday", "last week", or "this month".
    If the question names a month/year and asks what happened in that period,
    answer the event or setback itself; do not introduce a converted
    relative date outside that named period unless the question asks when.
-8. For specific objects, titles, signs, names, places, identities, statuses,
+9. For specific objects, titles, signs, names, places, identities, statuses,
    or emotions, copy
    the exact phrase from the context when present.
-9. When the question names a specific date, prefer memories whose occurred
+10. When the question names a specific date, prefer memories whose occurred
    date matches that date and ignore different-date memories unless there is
    no same-date evidence.
-10. For modal or likelihood questions using words like "would", "likely",
+11. For modal or likelihood questions using words like "would", "likely",
    "considered", or "might", infer the shortest supported answer from the
    strongest ranked behavioral, status, identity, or event evidence. Do not
    require the context to contain the exact yes/no wording from the question.
-11. For counterfactual questions with an "if" condition, answer from the
+12. For counterfactual questions with an "if" condition, answer from the
    evidence after applying the condition. If the context says the removed
    condition enabled, motivated, caused, or sustained the outcome, answer
    no/likely no; if the outcome is independently supported, answer yes.
-12. For modal questions about whether someone would do something soon, weigh
+13. For modal questions about whether someone would do something soon, weigh
    current plans, obligations, statuses, and active commitments as likelihood
    evidence even when the exact proposed action is not stated. For yes/no
    likelihood questions, an active competing commitment is enough evidence
    for likely no; do not require direct evidence about the rejected alternative.
-13. For "what kind/type of X" questions, answer with the descriptor or subtype
+14. For either/or preference questions, choose one of the named options when
+   ranked evidence supports that option or its attributes. Do not answer with
+   only the shared generic category.
+15. Keep role and ownership slots strict. If the question asks about one
+   person's relative, event, object, or action, do not answer from evidence
+   whose matching fact belongs to a different person. If no evidence matches
+   the requested owner and relation, answer that no information is available.
+   Speaker tags are ownership evidence: in "[STATEMENT speaker=Caroline] ...
+   my grandma", "my grandma" means Caroline's grandma, not Melanie's grandma.
+16. For adversarial or unanswerable-looking questions, a nearby fact is not
+   enough. The subject, owner, relation, and event in the evidence must all
+   match the question before returning a concrete answer.
+17. For "what kind/type of X" questions, answer with the descriptor or subtype
    of X. Prefer a ranked fact that actually describes X over a nearby fact
    about a different object, even if the nearby fact matches the action words.
-14. If the context contains no relevant evidence at all, answer exactly:
+18. If the context contains no relevant evidence at all, answer exactly:
    I don't know
 
-Answer:`
+${candidatePriority ? `${candidatePriority}\n\n` : ""}Answer:`
   },
 }
 
@@ -484,16 +725,10 @@ Question: ${question}
 
 Rules:
 1. Use ONLY the context. No outside knowledge.
-2. Refuse with "I don't know" ONLY when the context contains literally
-   zero information bearing on any aspect of the question. If even one
-   keyword from the question or its expected answer-type appears in
-   any context section, commit to an answer — synthesize from whatever
-   token, summary, or aggregate carries the closest match. Hedge with
-   "Based on the context, likely…" or "The context suggests…" if the
-   evidence is partial, but always commit to a specific claim drawn
-   from the text. Refusal on a question with any relevant context is
-   always wrong; a confident inference based on partial evidence is
-   acceptable.
+2. Answer only when the context directly supports the requested claim.
+   If the context has related but insufficient evidence, say what is
+   supported and what is unknown. Use "I don't know" when the requested
+   answer cannot be determined from the provided context.
 3. When the question asks for a specific named thing (a place, a person,
    a title, an object) and the context contains that exact phrase, prefer
    the exact phrase. When the question asks for an explanation, summary,
@@ -501,10 +736,9 @@ Rules:
    context — combine, infer, and connect across CONVERSATION_TURNS, FACTS,
    and EPISODES as needed.
 4. List questions (what/which X has Y done, names, pets, items, instruments,
-   activities, events): enumerate EVERY distinct same-type item that appears
-   anywhere in the context. Do not stop at the first precise fact. If a
-   lower-ranked FACT or EPISODE adds a compatible candidate that is not
-   contradicted by earlier evidence, include it.
+   activities, events): enumerate distinct same-type items that are directly
+   supported by the context. Do not invent missing items from category labels
+   or weak keyword overlap.
 5. Hypothetical questions (would/is X likely): infer from documented behaviors.
 6. FACTS/claims are the primary answer evidence. ENTITIES and EPISODES are
    supporting summaries; use them to fill missing coverage, but do not let
@@ -647,6 +881,23 @@ function saveState(bonfireId: string, s: ProviderStateFile): void {
   mkdirSync(dirname(p), { recursive: true })
   writeFileSync(p, JSON.stringify(s))
 }
+function clearState(bonfireId: string): void {
+  rmSync(cachePathFor(bonfireId), { force: true })
+}
+function hydrateState(bonfireId: string, force: boolean): ProviderStateFile {
+  if (force) {
+    clearState(bonfireId)
+  }
+  return loadState(bonfireId)
+}
+
+export const __bonfiresProviderStateForTests = {
+  cachePathFor,
+  loadState,
+  saveState,
+  clearState,
+  hydrateState,
+}
 
 export class BonfiresProvider implements Provider {
   name = "bonfires"
@@ -699,6 +950,7 @@ export class BonfiresProvider implements Provider {
     const apiUrl = config.apiUrl as string | undefined
     const arm = config.arm as BonfiresConfig["arm"] | undefined
     const bonfireId = config.bonfireId as string | undefined
+    const force = config.force === true
 
     if (!apiUrl || !arm || !bonfireId) {
       throw new Error("bonfires provider requires { apiUrl, arm, bonfireId } in config")
@@ -760,7 +1012,7 @@ export class BonfiresProvider implements Provider {
     // too so `awaitIndexing` can rebuild on resume (ingest phase gets
     // skipped by `-f indexing`, which would otherwise leave the
     // in-memory `sessionsForKg` empty).
-    const persisted = loadState(resolvedBonfireId)
+    const persisted = hydrateState(resolvedBonfireId, force)
     this.ingestedSessionIds = new Set(persisted.ingestedSessionIds)
     this.indexingDone = persisted.indexingDone
     this.sessionsForKg = persisted.sessionsForKg
@@ -819,9 +1071,9 @@ export class BonfiresProvider implements Provider {
   }
 
   async awaitIndexing(
-    _result: IngestResult,
+    result: IngestResult,
     _containerTag: string,
-    _onProgress?: IndexingProgressCallback
+    onProgress?: IndexingProgressCallback
   ): Promise<void> {
     if (this.indexingDone) {
       return
@@ -831,6 +1083,12 @@ export class BonfiresProvider implements Provider {
       agentId: this.agentId,
       bonfireId: this.config.bonfireId,
       sessions: this.sessionsForKg,
+    })
+    const completedIds = [...(result.documentIds ?? []), ...(result.taskIds ?? [])]
+    onProgress?.({
+      completedIds,
+      failedIds: [],
+      total: completedIds.length,
     })
     this.indexingDone = true
     this.persist()
@@ -845,10 +1103,9 @@ export class BonfiresProvider implements Provider {
     })
     // Date-rendering pre-processor (BONFIRES_HUMANIZE_DATES, default ON).
     // Rewrites ISO timestamps embedded in fact/edge/entity/episode text to
-    // human-readable forms before the answer LLM sees them. Recovers
-    // questions like q73 ("September 2023") where retrieval was perfect
-    // but the LLM failed to convert "2023-09-01T00:00:00+00:00" to
-    // "September 2023". Disable with BONFIRES_HUMANIZE_DATES=0 for A/B.
+    // human-readable forms before the answer LLM sees them, preserving the
+    // date-level grounding carried by retrieved evidence. Disable with
+    // BONFIRES_HUMANIZE_DATES=0 for A/B.
     if (process.env.BONFIRES_HUMANIZE_DATES === "0") {
       return hits
     }
@@ -856,10 +1113,10 @@ export class BonfiresProvider implements Provider {
   }
 
   /** Resolve the ``YYYY-MM-DD`` reference "now" for temporal auxiliary
-   * ranking — the max ``metadata.date`` across ingested sessions. For LoCoMo
-   * this is the conversation cutoff (last session date), which is the
-   * natural anchor for questions like ``"yesterday"`` or ``"last week"``.
-   * Returns undefined when no parseable date is available. */
+   * ranking — the max ``metadata.date`` across ingested sessions. This is
+   * the conversation cutoff, which is the natural anchor for questions like
+   * ``"yesterday"`` or ``"last week"``. Returns undefined when no parseable
+   * date is available. */
   private computeNowDate(): string | undefined {
     let latestMs = -Infinity
     for (const session of this.sessionsForKg) {

@@ -867,14 +867,23 @@ export class BonfiresClient {
     hydrateGraph?: boolean
     embedQuery?: boolean
     surfaceFamilies?: string[]
+    cxnLibraryProfile?: string
+    cxnRecipePreselectLimit?: number
+    cxnRecipePreselectMinScore?: number
+    fcgTopicTopK?: number
+    fcgComprehensionAttemptLimit?: number
+    fcgTopicSimilarityThreshold?: number
+    fcgGrammarCacheSize?: number
     fcgPrecisionMissPolicy?: string
     fcgMissLearningEnabled?: boolean
     fcgLearningTopEvidenceK?: number
     fcgLearningAbstractSupportThreshold?: number
     fcgLearnedOverlayEnabled?: boolean
     fcgLearnedOverlayMinScore?: number
+    ecsSearchEnabled?: boolean
+    contextPacketEnabled?: boolean
   }): Promise<MemoryKernelSearchResult> {
-    return this.req<MemoryKernelSearchResult>("POST", "/search/memory-kernel", {
+    const body: Record<string, unknown> = {
       bonfire_id: args.bonfireId,
       profile: args.profile ?? "nlp_single_graph_v1",
       query: args.query,
@@ -886,13 +895,25 @@ export class BonfiresClient {
       hydrate_graph: args.hydrateGraph ?? true,
       embed_query: args.embedQuery ?? true,
       surface_families: args.surfaceFamilies ?? [],
+      fcg_topic_top_k: args.fcgTopicTopK ?? 8,
+      fcg_comprehension_attempt_limit: args.fcgComprehensionAttemptLimit ?? 3,
+      fcg_topic_similarity_threshold: args.fcgTopicSimilarityThreshold ?? 0.3,
+      fcg_grammar_cache_size: args.fcgGrammarCacheSize ?? 4,
       fcg_precision_miss_policy: args.fcgPrecisionMissPolicy ?? "continue",
-      fcg_miss_learning_enabled: args.fcgMissLearningEnabled ?? false,
+      fcg_miss_learning_enabled: args.fcgMissLearningEnabled ?? true,
       fcg_learning_top_evidence_k: args.fcgLearningTopEvidenceK ?? 3,
       fcg_learning_abstract_support_threshold: args.fcgLearningAbstractSupportThreshold ?? 2,
-      fcg_learned_overlay_enabled: args.fcgLearnedOverlayEnabled ?? false,
+      fcg_learned_overlay_enabled: args.fcgLearnedOverlayEnabled ?? true,
       fcg_learned_overlay_min_score: args.fcgLearnedOverlayMinScore ?? 0.45,
-    })
+      ecs_search_enabled: args.ecsSearchEnabled ?? false,
+      context_packet_enabled: args.contextPacketEnabled ?? false,
+    }
+    if (args.cxnLibraryProfile !== undefined) body.cxn_library_profile = args.cxnLibraryProfile
+    if (args.cxnRecipePreselectLimit !== undefined)
+      body.cxn_recipe_preselect_limit = args.cxnRecipePreselectLimit
+    if (args.cxnRecipePreselectMinScore !== undefined)
+      body.cxn_recipe_preselect_min_score = args.cxnRecipePreselectMinScore
+    return this.req<MemoryKernelSearchResult>("POST", "/search/memory-kernel", body)
   }
 
   hypermemStackIndex(args: {

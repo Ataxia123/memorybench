@@ -74,20 +74,17 @@ describe("formatHuman", () => {
   })
 
   it("zero-time ISO keeps day precision", () => {
-    // q73 case: "2023-09-01T00:00:00+00:00" → "1 September 2023"
-    // (was "September 2023" pre day-precision upgrade — gold answers
-    // in LoCoMo use day-precision form, so always include day.)
     const p = parseIso("2023-09-01T00:00:00+00:00")
     expect(formatHuman(p!)).toBe("1 September 2023")
   })
 })
 
 describe("humanizeIso", () => {
-  it("round-trips correctly for the q73 gold-fact ISO (day-precision)", () => {
+  it("round-trips zero-time ISO with day precision", () => {
     expect(humanizeIso("2023-09-01T00:00:00+00:00")).toBe("1 September 2023")
   })
 
-  it("handles 14 August (q44 daughter's birthday)", () => {
+  it("handles non-zero datetime ISO", () => {
     expect(humanizeIso("2023-08-14T15:43:00+00:00")).toBe("14 August 2023")
   })
 
@@ -117,7 +114,6 @@ describe("humanizeDatesInText", () => {
   })
 
   it("rewrites trailing bare (ISO) parenthetical (graphiti edge form)", () => {
-    // This is the exact shape the v70 fact at q73 rank #1 uses.
     const input =
       "Melanie had to stop her pottery practice due to an injury sustained last month. (2023-09-01T00:00:00+00:00)"
     expect(humanizeDatesInText(input)).toBe(
@@ -216,6 +212,21 @@ describe("humanizeHits", () => {
     const out = humanizeHits(hits)
     expect(out[0].score).toBe(0.42)
     expect(out[0].kind).toBe("fact")
+  })
+
+  it("preserves non-enumerable array diagnostics", () => {
+    const hits = [{ text: "fact body. (2023-09-01T00:00:00+00:00)", kind: "fact" as const }]
+    Object.defineProperty(hits, "diagnostics", {
+      value: { memory_kernel: { retrieval_work_order: { planner_mode: "independent" } } },
+      enumerable: false,
+    })
+
+    const out = humanizeHits(hits)
+
+    expect(Object.getOwnPropertyDescriptor(out, "diagnostics")?.enumerable).toBe(false)
+    expect((out as unknown as { diagnostics: unknown }).diagnostics).toEqual({
+      memory_kernel: { retrieval_work_order: { planner_mode: "independent" } },
+    })
   })
 
   it("handles hits without an explicit kind (treated as non-chunk → humanized)", () => {

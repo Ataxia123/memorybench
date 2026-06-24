@@ -129,12 +129,14 @@ export async function calculateRetrievalMetrics(
     precisionAtK + recallAtK > 0 ? (2 * (precisionAtK * recallAtK)) / (precisionAtK + recallAtK) : 0
 
   const firstRelevantIndex = relevanceScores.findIndex((r) => r === 1)
+  const firstRelevantRank = firstRelevantIndex >= 0 ? firstRelevantIndex + 1 : undefined
   const mrr = firstRelevantIndex >= 0 ? 1 / (firstRelevantIndex + 1) : 0
 
   const ndcg = calculateNDCG(relevanceScores, totalRelevant)
 
   return {
     hitAtK,
+    firstRelevantRank,
     precisionAtK,
     recallAtK,
     f1AtK,

@@ -33,6 +33,7 @@ export type SearchResult = unknown
 
 export interface RetrievalMetrics {
   hitAtK: number
+  firstRelevantRank?: number
   precisionAtK: number
   recallAtK: number
   f1AtK: number

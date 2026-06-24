@@ -45,6 +45,7 @@ export interface SearchPhaseCheckpoint {
   status: PhaseStatus
   resultFile?: string
   results?: SearchResult[]
+  diagnostics?: Record<string, unknown>
   resultCount?: number
   startedAt?: string
   completedAt?: string

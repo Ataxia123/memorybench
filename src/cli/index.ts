@@ -7,6 +7,9 @@ import { statusCommand } from "./commands/status"
 import { listQuestionsCommand } from "./commands/list-questions"
 import { showFailuresCommand } from "./commands/show-failures"
 import { reportGateCommand } from "./commands/report-gate"
+import { abGateCommand } from "./commands/ab-gate"
+import { failureMatrixCommand } from "./commands/failure-matrix"
+import { nativeActivationGateCommand } from "./commands/native-activation-gate"
 import { serveCommand } from "./commands/serve"
 import { getAvailableProviders } from "../providers"
 import { getAvailableBenchmarks } from "../benchmarks"
@@ -27,6 +30,10 @@ Commands:
   list-questions  List all questions in a benchmark (with pagination)
   show-failures   Show failed questions from a run with full debugging data
   report-gate     Check score and latency gates from an existing run artifact
+  ab-gate         Compare baseline/fresh runs with topology, quality, surface, and latency gates
+  failure-matrix  Classify retrieval quality failures from existing run artifacts
+  native-activation-gate
+                  Check MemoryKernel native activation runtime gates
   status          Check run status
   serve           Start the web UI server
   help            Show help (use 'help providers', 'help models', 'help benchmarks' for details)
@@ -191,6 +198,15 @@ export async function cli(args: string[]): Promise<void> {
       break
     case "report-gate":
       await reportGateCommand(commandArgs)
+      break
+    case "ab-gate":
+      await abGateCommand(commandArgs)
+      break
+    case "failure-matrix":
+      await failureMatrixCommand(commandArgs)
+      break
+    case "native-activation-gate":
+      await nativeActivationGateCommand(commandArgs)
       break
     case "serve":
       await serveCommand(commandArgs)

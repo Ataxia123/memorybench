@@ -9,7 +9,7 @@ import { getAvailableBenchmarks } from "../../benchmarks"
 import { listAvailableModels, DEFAULT_ANSWERING_MODEL } from "../../utils/models"
 import { logger } from "../../utils/logger"
 
-const DEFAULT_JUDGE_MODEL = "gpt-4o"
+const DEFAULT_JUDGE_MODEL = "gpt-4.1-mini"
 
 interface RunArgs {
   provider?: string
@@ -20,6 +20,7 @@ interface RunArgs {
   limit?: number
   sample?: number
   sampleType?: SampleType
+  questionIds?: string[]
   force?: boolean
   fromPhase?: PhaseId
   concurrency?: ConcurrencyConfig
@@ -30,6 +31,15 @@ function generateRunId(): string {
   const date = now.toISOString().slice(0, 10).replace(/-/g, "")
   const time = now.toISOString().slice(11, 19).replace(/:/g, "")
   return `run-${date}-${time}`
+}
+
+function parseQuestionIds(value: string | undefined): string[] | null {
+  if (!value) return null
+  const explicitQuestionIds = value.match(/[A-Za-z][A-Za-z0-9_-]*-q\d+/g)
+  const questionIds = (explicitQuestionIds ?? value.split(","))
+    .map((questionId) => questionId.trim())
+    .filter((questionId, index, all) => questionId.length > 0 && all.indexOf(questionId) === index)
+  return questionIds.length > 0 ? questionIds : null
 }
 
 export function parseRunArgs(args: string[]): RunArgs | null {
@@ -52,6 +62,13 @@ export function parseRunArgs(args: string[]): RunArgs | null {
       parsed.limit = parseInt(args[++i], 10)
     } else if (arg === "-s" || arg === "--sample") {
       parsed.sample = parseInt(args[++i], 10)
+    } else if (arg === "--questions" || arg === "--question-ids") {
+      const questionIds = parseQuestionIds(args[++i])
+      if (!questionIds) {
+        logger.error("--questions requires a comma-separated question ID list")
+        return null
+      }
+      parsed.questionIds = questionIds
     } else if (arg === "--sample-type") {
       const type = args[++i] as SampleType
       if (type === "consecutive" || type === "random") {
@@ -97,7 +114,28 @@ export function parseRunArgs(args: string[]): RunArgs | null {
     parsed.concurrency = concurrency as ConcurrencyConfig
   }
 
+  if (parsed.questionIds && (parsed.sample || parsed.limit)) {
+    logger.warn("--questions overrides --sample and --limit")
+  }
+
   return parsed as RunArgs
+}
+
+export function locomoConvGuardMessage(
+  parsed: RunArgs,
+  env: Record<string, string | undefined> = process.env
+): string | null {
+  const conv = (env.LOCOMO_CONV || "").trim()
+  if (!conv || parsed.benchmark !== "locomo") {
+    return null
+  }
+  if (parsed.questionIds || parsed.sample || parsed.limit) {
+    return null
+  }
+  return (
+    `LOCOMO_CONV=${conv} only filters LoCoMo when --limit, --sample, or --questions is provided. ` +
+    `For a conv-only run use LOCOMO_CONV="${conv}" with --limit 9999 and verify the sampling log.`
+  )
 }
 
 export async function runCommand(args: string[]): Promise<void> {
@@ -106,7 +144,7 @@ export async function runCommand(args: string[]): Promise<void> {
   if (!parsed) {
     console.log("Usage:")
     console.log(
-      "  New run:        bun run src/index.ts run -p <provider> -b <benchmark> [-r <runId>] [-j <judge>] [-m <model>] [-s <n>] [-l <limit>] [--force]"
+      "  New run:        bun run src/index.ts run -p <provider> -b <benchmark> [-r <runId>] [-j <judge>] [-m <model>] [-s <n>] [-l <limit>] [--questions <ids>] [--force]"
     )
     console.log("  Continue run:   bun run src/index.ts run -r <runId> [-j <judge>] [-m <model>]")
     console.log("  From phase:     bun run src/index.ts run -r <runId> -f <phase>")
@@ -120,6 +158,9 @@ export async function runCommand(args: string[]): Promise<void> {
     )
     console.log(`  -m, --answering-model  Answering model (default: ${DEFAULT_ANSWERING_MODEL})`)
     console.log("  -s, --sample           Sample N questions per category")
+    console.log(
+      "  --questions            Comma-separated question IDs to process, overrides sample/limit"
+    )
     console.log("  --sample-type          Sample type: consecutive (default), random")
     console.log("  -l, --limit            Limit total number of questions to process")
     console.log(`  -f, --from-phase       Start from phase: ${PHASE_ORDER.join(", ")}`)
@@ -136,9 +177,11 @@ export async function runCommand(args: string[]): Promise<void> {
   }
 
   const checkpointManager = new CheckpointManager()
+  let continuing = false
 
   // Check if run exists
   if (checkpointManager.exists(parsed.runId)) {
+    continuing = true
     const checkpoint = checkpointManager.load(parsed.runId)!
 
     // If provider/benchmark provided, validate they match
@@ -183,10 +226,20 @@ export async function runCommand(args: string[]): Promise<void> {
     parsed.judgeModel = parsed.judgeModel || DEFAULT_JUDGE_MODEL
   }
 
+  if (!continuing) {
+    const guardMessage = locomoConvGuardMessage(parsed)
+    if (guardMessage) {
+      logger.error(guardMessage)
+      return
+    }
+  }
+
   const phases = parsed.fromPhase ? getPhasesFromPhase(parsed.fromPhase) : undefined
 
   let sampling: SamplingConfig | undefined
-  if (parsed.sample) {
+  if (parsed.questionIds) {
+    sampling = undefined
+  } else if (parsed.sample) {
     sampling = {
       mode: "sample",
       sampleType: parsed.sampleType || "consecutive",
@@ -207,6 +260,7 @@ export async function runCommand(args: string[]): Promise<void> {
     answeringModel: parsed.answeringModel,
     sampling,
     concurrency: parsed.concurrency,
+    questionIds: parsed.questionIds,
     force: parsed.force,
     phases,
   })

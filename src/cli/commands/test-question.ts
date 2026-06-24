@@ -6,7 +6,7 @@ import { getAvailableBenchmarks } from "../../benchmarks"
 import { listAvailableModels } from "../../utils/models"
 import { logger } from "../../utils/logger"
 
-const DEFAULT_JUDGE_MODEL = "gpt-4o"
+const DEFAULT_JUDGE_MODEL = "gpt-4.1-mini"
 
 interface TestArgs {
   provider?: string
@@ -57,7 +57,7 @@ export async function testQuestionCommand(args: string[]): Promise<void> {
     console.log("  -r, --run-id           Run identifier (must have completed ingest phase)")
     console.log("  -q, --question-id      Question ID to test")
     console.log(`  -j, --judge            Judge model (default: ${DEFAULT_JUDGE_MODEL})`)
-    console.log("  -m, --answering-model  Answering model (default: gpt-4o)")
+    console.log("  -m, --answering-model  Answering model (default: gpt-4.1-mini)")
     console.log("")
     console.log(`Available models: ${listAvailableModels().join(", ")}`)
     return

@@ -4,13 +4,6 @@
  * Transforms ISO-8601 timestamps embedded in retrieved facts/edges/entity
  * summaries into human-readable forms BEFORE the answering LLM sees them.
  *
- * Background: gpt-4o-mini consistently fails to convert
- *   "...injury sustained last month. (2023-09-01T00:00:00+00:00)"
- * into "September 2023" — even with explicit prompt instructions and the
- * gold fact at rank #1. v70 hand-trace on q73 ("When did Melanie get
- * hurt?", gold "September 2023") confirmed: hypothesis was "October 13,
- * 2023" because the LLM grabbed the OTHER fact's event_time verbatim.
- *
  * Strategy: rewrite the strings server-side so the LLM never sees the
  * ISO form. We render a human date inline in two cases:
  *   1. Trailing parenthetical of the form `(YYYY-MM-DDT...)` or
@@ -19,20 +12,13 @@
  *   2. Bare ISO timestamps embedded mid-text. Inline-replace with
  *      `<DD Month YYYY>`.
  *
- * Format choice: gold answers in LoCoMo predominantly use day-precision
- *   "13 August"            — q44
- *   "23 August 2023"       — q53
- *   "1 September 2023"     — q73 family
- *   "7 May 2023"           — many "When did X" questions
- * A 138-question survey of conv-26 alone shows `DD Month YYYY` is the
- * dominant gold form. So we ALWAYS emit day precision — even when the
- * source ISO is `T00:00:00` (graphiti's date-precision sentinel). The
- * day is in the source string in both cases (`2023-08-23` and
- * `2023-08-23T15:43:00`); surfacing it gives the answering LLM exact
- * day-level grounding for "When did X happen?" style questions.
+ * Format choice: always emit day precision because the day is present in
+ * the source string in both date-only and datetime forms (`2023-08-23`
+ * and `2023-08-23T15:43:00`). Surfacing the full date preserves the
+ * most specific temporal grounding available from the retrieved evidence.
  *
  * Returning the year always preserves disambiguation when conversations
- * span multiple years (this is rare in LoCoMo but matters elsewhere).
+ * span multiple years.
  *
  * Chunks ([CHUNK ...] / [PREFERENCE-SUMMARY ...] / [TOPIC-SUMMARY ...])
  * already carry a `[<tag> YYYY-MM-DD <speaker>]` prefix that the LLM
@@ -86,11 +72,10 @@ export function parseIso(s: string): ParsedIso | null {
  *
  * Always emits day precision (`"23 August 2023"`) regardless of whether
  * the source ISO carried a real time-of-day. The day is in the source
- * string in both cases (`2023-08-23` and `2023-08-23T15:43:00`); surfacing
- * it gives the answering LLM exact day-level grounding for "When did X
- * happen?" questions whose LoCoMo gold answers (138/1986 conv-26
- * questions) overwhelmingly use the `DD Month YYYY` form. Time-of-day
- * is dropped — the embedder/LLM never need clock precision.
+ * string in both cases (`2023-08-23` and `2023-08-23T15:43:00`), and
+ * preserving it keeps the rendered evidence as specific as the source.
+ * Time-of-day is dropped because downstream answer rendering does not use
+ * clock precision.
  *
  * `p.hasTime` is preserved on the struct for any consumer that cares
  * about the date-vs-datetime distinction, but the rendered string no
@@ -110,7 +95,7 @@ export function humanizeIso(s: string): string {
 // ---------------------------------------------------------------------------
 // Text rewriting
 //
-// We handle three distinct shapes seen in the bench's rendered fact/edge text:
+// We handle three distinct shapes seen in rendered fact/edge text:
 //
 //   A) `(event_time: 2023-09-01T00:00:00+00:00)`  ← episodes, some facts
 //   B) `(2023-09-01T00:00:00+00:00)`              ← graphiti edges
@@ -246,8 +231,13 @@ function parseExplicitDate(text: string): ParsedExplicitDate | null {
  * tags are intentional date markers the LLM consumes correctly, and
  * the chunk body is conversational prose with already-human dates. */
 export function humanizeHits<T extends { text: string; kind?: string }>(hits: T[]): T[] {
-  return hits.map((h) => {
+  const out = hits.map((h) => {
     if (h.kind === "chunk") return h
     return { ...h, text: humanizeDatesInText(h.text) }
   })
+  const diagnostics = Object.getOwnPropertyDescriptor(hits, "diagnostics")
+  if (diagnostics) {
+    Object.defineProperty(out, "diagnostics", diagnostics)
+  }
+  return out
 }

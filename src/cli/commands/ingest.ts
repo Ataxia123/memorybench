@@ -123,7 +123,7 @@ export async function ingestCommand(args: string[]): Promise<void> {
       sampling: parsed.limit ? { mode: "limit", limit: parsed.limit } : undefined,
       concurrency: parsed.concurrency ? { default: parsed.concurrency } : undefined,
       phases: parsed.phases,
-      judgeModel: "gpt-4o",
+      judgeModel: "gpt-4.1-mini",
     })
   } else {
     await orchestrator.ingest({

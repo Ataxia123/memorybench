@@ -86,7 +86,7 @@ export class Orchestrator {
       benchmark: benchmarkName,
       judgeModel,
       runId,
-      answeringModel = "gpt-4o",
+      answeringModel = "gpt-4.1-mini",
       limit,
       sampling,
       concurrency,
@@ -154,7 +154,12 @@ export class Orchestrator {
       effectiveLimit = checkpoint.limit
       targetQuestionIds = checkpoint.targetQuestionIds
 
-      if (!targetQuestionIds) {
+      if (questionIds && questionIds.length > 0) {
+        targetQuestionIds = questionIds
+        logger.info(
+          `Using explicit questionIds for this invocation: ${targetQuestionIds.length} questions`
+        )
+      } else if (!targetQuestionIds) {
         const startedQuestions = Object.values(checkpoint.questions)
           .filter((q) => Object.values(q.phases).some((p) => p.status !== "pending"))
           .map((q) => q.questionId)
@@ -260,7 +265,11 @@ export class Orchestrator {
           groundTruth: q.groundTruth,
           questionType: q.questionType,
         })
-        if (process.env.MEMORYBENCH_PREINDEXED === "1" && !phases.includes("ingest") && !phases.includes("indexing")) {
+        if (
+          process.env.MEMORYBENCH_PREINDEXED === "1" &&
+          !phases.includes("ingest") &&
+          !phases.includes("indexing")
+        ) {
           this.checkpointManager.updatePhase(checkpoint, q.questionId, "ingest", {
             status: "completed",
             completedSessions: [],
@@ -281,7 +290,7 @@ export class Orchestrator {
     }
 
     const provider = createProvider(providerName)
-    await provider.initialize(getProviderConfig(providerName))
+    await provider.initialize({ ...getProviderConfig(providerName), force })
 
     if (phases.includes("ingest")) {
       await runIngestPhase(
@@ -349,7 +358,7 @@ export class Orchestrator {
   ): Promise<void> {
     await this.run({
       ...options,
-      judgeModel: options.judgeModel || "gpt-4o",
+      judgeModel: options.judgeModel || "gpt-4.1-mini",
       phases: ["ingest", "indexing"],
     })
   }
@@ -357,7 +366,11 @@ export class Orchestrator {
   async search(
     options: Omit<OrchestratorOptions, "judgeModel" | "phases"> & { judgeModel?: string }
   ): Promise<void> {
-    await this.run({ ...options, judgeModel: options.judgeModel || "gpt-4o", phases: ["search"] })
+    await this.run({
+      ...options,
+      judgeModel: options.judgeModel || "gpt-4.1-mini",
+      phases: ["search"],
+    })
   }
 
   async evaluate(options: OrchestratorOptions): Promise<void> {

@@ -1,6 +1,10 @@
 import { describe, it, expect, mock, spyOn } from "bun:test"
 import { armSearch, flattenFacts } from "./search.js"
 
+function mockArg<T>(value: unknown, call = 0, arg = 0): T {
+  return ((value as { mock: { calls: unknown[][] } }).mock.calls[call] ?? [])[arg] as T
+}
+
 describe("flattenFacts", () => {
   it("maps kg_delve edges to {text, score}", () => {
     const out = flattenFacts({
@@ -33,7 +37,7 @@ describe("armSearch", () => {
       query: "who",
       config: { ...baseCfg, arm: "vector" },
     })
-    expect(client.vectorSearch.mock.calls[0][0]).toEqual({
+    expect(mockArg<Record<string, unknown>>(client.vectorSearch)).toEqual({
       bonfireId: "bf",
       query: "who",
       limit: 10,
@@ -51,7 +55,7 @@ describe("armSearch", () => {
       query: "who",
       config: { ...baseCfg, arm: "graph" },
     })
-    expect(client.kgDelve.mock.calls[0][0]).toEqual({
+    expect(mockArg<Record<string, unknown>>(client.kgDelve)).toEqual({
       bonfireId: "bf",
       query: "who",
       numResults: 10,
@@ -69,7 +73,7 @@ describe("armSearch", () => {
       query: "who",
       config: { ...baseCfg, arm: "smart" },
     })
-    expect(client.kgDelve.mock.calls[0][0]).toEqual({
+    expect(mockArg<Record<string, unknown>>(client.kgDelve)).toEqual({
       bonfireId: "bf",
       query: "who",
       numResults: 20,
@@ -78,7 +82,7 @@ describe("armSearch", () => {
       bfsScopes: undefined,
       rerankScopes: undefined,
     })
-    expect(client.kgDelve.mock.calls[1][0]).toEqual({
+    expect(mockArg<Record<string, unknown>>(client.kgDelve, 1)).toEqual({
       bonfireId: "bf",
       query: "who",
       numResults: 20,
@@ -104,6 +108,31 @@ describe("armSearch", () => {
     })
     expect(out).toEqual([])
     errSpy.mockRestore()
+  })
+
+  it("throws memory-kernel search errors instead of completing with empty results", async () => {
+    const prevEndpoint = process.env.BONFIRES_SEARCH_ENDPOINT
+    const errSpy = spyOn(console, "error").mockImplementation(() => {})
+    try {
+      process.env.BONFIRES_SEARCH_ENDPOINT = "memory-kernel"
+      const client = {
+        memoryKernelSearch: mock(async () => {
+          throw new Error("FCG grammar load failed")
+        }),
+        hypermemSearch: mock(async () => ({ facts: [] })),
+      }
+      await expect(
+        armSearch({
+          client: client as unknown as Parameters<typeof armSearch>[0]["client"],
+          query: "who",
+          config: { ...baseCfg, arm: "hypermem" },
+        })
+      ).rejects.toThrow("FCG grammar load failed")
+    } finally {
+      if (prevEndpoint === undefined) delete process.env.BONFIRES_SEARCH_ENDPOINT
+      else process.env.BONFIRES_SEARCH_ENDPOINT = prevEndpoint
+      errSpy.mockRestore()
+    }
   })
 
   it("hypermem arm defaults to score-ranked context and does not expose fact bookkeeping timestamps", async () => {
@@ -159,8 +188,9 @@ describe("armSearch", () => {
         query: "when",
         config: { ...baseCfg, arm: "hypermem" },
       })
-      expect(client.hypermemSearch.mock.calls[0][0].outputType).toBe("111")
-      expect(client.hypermemSearch.mock.calls[0][0].factTopK).toBe(14)
+      const request = mockArg<{ outputType: string; factTopK: number }>(client.hypermemSearch)
+      expect(request.outputType).toBe("111")
+      expect(request.factTopK).toBe(14)
       expect(out.map((h) => h.kind)).toEqual([
         "community",
         "episode",
@@ -197,14 +227,25 @@ describe("armSearch", () => {
     const prevSurfaceLimit = process.env.BONFIRES_MEMORY_KERNEL_SURFACE_LIMIT
     const prevConstructLimit = process.env.BONFIRES_MEMORY_KERNEL_CONSTRUCT_CANDIDATE_LIMIT
     const prevUseFcg = process.env.BONFIRES_MEMORY_KERNEL_USE_FCG
+    const prevCxnLibraryProfile = process.env.BONFIRES_MEMORY_KERNEL_CXN_LIBRARY_PROFILE
+    const prevCxnRecipePreselectLimit =
+      process.env.BONFIRES_MEMORY_KERNEL_CXN_RECIPE_PRESELECT_LIMIT
+    const prevCxnRecipePreselectMinScore =
+      process.env.BONFIRES_MEMORY_KERNEL_CXN_RECIPE_PRESELECT_MIN_SCORE
+    const prevFcgTopicTopK = process.env.BONFIRES_MEMORY_KERNEL_FCG_TOPIC_TOP_K
+    const prevFcgComprehensionAttemptLimit =
+      process.env.BONFIRES_MEMORY_KERNEL_FCG_COMPREHENSION_ATTEMPT_LIMIT
+    const prevFcgTopicSimilarityThreshold =
+      process.env.BONFIRES_MEMORY_KERNEL_FCG_TOPIC_SIMILARITY_THRESHOLD
+    const prevFcgGrammarCacheSize = process.env.BONFIRES_MEMORY_KERNEL_FCG_GRAMMAR_CACHE_SIZE
     const prevMissPolicy = process.env.BONFIRES_MEMORY_KERNEL_FCG_PRECISION_MISS_POLICY
     const prevMissLearning = process.env.BONFIRES_MEMORY_KERNEL_FCG_MISS_LEARNING
     const prevTopEvidenceK = process.env.BONFIRES_MEMORY_KERNEL_FCG_LEARNING_TOP_EVIDENCE_K
-    const prevSupportThreshold =
-      process.env.BONFIRES_MEMORY_KERNEL_FCG_ABSTRACT_SUPPORT_THRESHOLD
+    const prevSupportThreshold = process.env.BONFIRES_MEMORY_KERNEL_FCG_ABSTRACT_SUPPORT_THRESHOLD
     const prevLearnedOverlay = process.env.BONFIRES_MEMORY_KERNEL_FCG_LEARNED_OVERLAY
     const prevLearnedOverlayMinScore =
       process.env.BONFIRES_MEMORY_KERNEL_FCG_LEARNED_OVERLAY_MIN_SCORE
+    const prevEcsSearch = process.env.BONFIRES_MEMORY_KERNEL_ECS_SEARCH_ENABLED
     try {
       process.env.BONFIRES_SEARCH_ENDPOINT = "memory-kernel"
       process.env.BONFIRES_HYPERMEM_PROFILE = "nlp_single_graph_v1"
@@ -213,12 +254,20 @@ describe("armSearch", () => {
       process.env.BONFIRES_MEMORY_KERNEL_SURFACE_LIMIT = "5"
       process.env.BONFIRES_MEMORY_KERNEL_CONSTRUCT_CANDIDATE_LIMIT = "13"
       process.env.BONFIRES_MEMORY_KERNEL_USE_FCG = "1"
+      process.env.BONFIRES_MEMORY_KERNEL_CXN_LIBRARY_PROFILE = "performances"
+      process.env.BONFIRES_MEMORY_KERNEL_CXN_RECIPE_PRESELECT_LIMIT = "5"
+      process.env.BONFIRES_MEMORY_KERNEL_CXN_RECIPE_PRESELECT_MIN_SCORE = "0.1"
+      process.env.BONFIRES_MEMORY_KERNEL_FCG_TOPIC_TOP_K = "4"
+      process.env.BONFIRES_MEMORY_KERNEL_FCG_COMPREHENSION_ATTEMPT_LIMIT = "2"
+      process.env.BONFIRES_MEMORY_KERNEL_FCG_TOPIC_SIMILARITY_THRESHOLD = "0.42"
+      process.env.BONFIRES_MEMORY_KERNEL_FCG_GRAMMAR_CACHE_SIZE = "12"
       process.env.BONFIRES_MEMORY_KERNEL_FCG_PRECISION_MISS_POLICY = "continue"
-      process.env.BONFIRES_MEMORY_KERNEL_FCG_MISS_LEARNING = "1"
+      delete process.env.BONFIRES_MEMORY_KERNEL_FCG_MISS_LEARNING
       process.env.BONFIRES_MEMORY_KERNEL_FCG_LEARNING_TOP_EVIDENCE_K = "3"
       process.env.BONFIRES_MEMORY_KERNEL_FCG_ABSTRACT_SUPPORT_THRESHOLD = "2"
       process.env.BONFIRES_MEMORY_KERNEL_FCG_LEARNED_OVERLAY = "1"
       process.env.BONFIRES_MEMORY_KERNEL_FCG_LEARNED_OVERLAY_MIN_SCORE = "0.45"
+      process.env.BONFIRES_MEMORY_KERNEL_ECS_SEARCH_ENABLED = "1"
       const client = {
         memoryKernelSearch: mock(async () => ({
           evidence: [
@@ -232,7 +281,20 @@ describe("armSearch", () => {
               metadata: { recipe: "topic_relation" },
             },
           ],
-          diagnostics: { fcg_selected_topic_count: 2 },
+          diagnostics: {
+            fcg_selected_topic_count: 2,
+            answer_candidates: [
+              {
+                text: "Alice",
+                answer_kind: "entity",
+                source_candidate_id: "construct:1",
+                source_rank: 1,
+                statement_id: "stmt-1",
+                answer_role: "person",
+                confidence: 0.75,
+              },
+            ],
+          },
         })),
         hypermemSearch: mock(async () => ({ facts: [] })),
       }
@@ -242,7 +304,7 @@ describe("armSearch", () => {
         config: { ...baseCfg, arm: "hypermem" },
       })
       expect(client.hypermemSearch.mock.calls.length).toBe(0)
-      expect(client.memoryKernelSearch.mock.calls[0][0]).toEqual({
+      expect(mockArg<Record<string, unknown>>(client.memoryKernelSearch)).toEqual({
         bonfireId: "bf",
         query: "who met Bob?",
         profile: "nlp_single_graph_v1",
@@ -254,12 +316,20 @@ describe("armSearch", () => {
         hydrateGraph: true,
         embedQuery: true,
         surfaceFamilies: [],
+        cxnLibraryProfile: "performances",
+        cxnRecipePreselectLimit: 5,
+        cxnRecipePreselectMinScore: 0.1,
+        fcgTopicTopK: 4,
+        fcgComprehensionAttemptLimit: 2,
+        fcgTopicSimilarityThreshold: 0.42,
+        fcgGrammarCacheSize: 12,
         fcgPrecisionMissPolicy: "continue",
         fcgMissLearningEnabled: true,
         fcgLearningTopEvidenceK: 3,
         fcgLearningAbstractSupportThreshold: 2,
         fcgLearnedOverlayEnabled: true,
         fcgLearnedOverlayMinScore: 0.45,
+        ecsSearchEnabled: true,
       })
       expect(out).toEqual([
         {
@@ -272,12 +342,39 @@ describe("armSearch", () => {
               candidate_id: "construct:1",
               family: "construct_occurrence",
               source_ids: ["stmt-1"],
+              answer_candidates: [
+                {
+                  text: "Alice",
+                  answer_kind: "entity",
+                  source_candidate_id: "construct:1",
+                  source_rank: 1,
+                  statement_id: "stmt-1",
+                  answer_role: "person",
+                  confidence: 0.75,
+                },
+              ],
               metadata: { recipe: "topic_relation" },
-              diagnostics: { fcg_selected_topic_count: 2 },
             },
           },
         },
       ])
+      expect(Object.getOwnPropertyDescriptor(out, "diagnostics")?.enumerable).toBe(false)
+      expect((out as unknown as { diagnostics: unknown }).diagnostics).toEqual({
+        memory_kernel: {
+          fcg_selected_topic_count: 2,
+          answer_candidates: [
+            {
+              text: "Alice",
+              answer_kind: "entity",
+              source_candidate_id: "construct:1",
+              source_rank: 1,
+              statement_id: "stmt-1",
+              answer_role: "person",
+              confidence: 0.75,
+            },
+          ],
+        },
+      })
     } finally {
       if (prevEndpoint === undefined) delete process.env.BONFIRES_SEARCH_ENDPOINT
       else process.env.BONFIRES_SEARCH_ENDPOINT = prevEndpoint
@@ -285,7 +382,8 @@ describe("armSearch", () => {
       else process.env.BONFIRES_HYPERMEM_PROFILE = prevProfile
       if (prevTopK === undefined) delete process.env.BONFIRES_MEMORY_KERNEL_TOP_K
       else process.env.BONFIRES_MEMORY_KERNEL_TOP_K = prevTopK
-      if (prevCandidateLimit === undefined) delete process.env.BONFIRES_MEMORY_KERNEL_CANDIDATE_LIMIT
+      if (prevCandidateLimit === undefined)
+        delete process.env.BONFIRES_MEMORY_KERNEL_CANDIDATE_LIMIT
       else process.env.BONFIRES_MEMORY_KERNEL_CANDIDATE_LIMIT = prevCandidateLimit
       if (prevSurfaceLimit === undefined) delete process.env.BONFIRES_MEMORY_KERNEL_SURFACE_LIMIT
       else process.env.BONFIRES_MEMORY_KERNEL_SURFACE_LIMIT = prevSurfaceLimit
@@ -294,6 +392,33 @@ describe("armSearch", () => {
       else process.env.BONFIRES_MEMORY_KERNEL_CONSTRUCT_CANDIDATE_LIMIT = prevConstructLimit
       if (prevUseFcg === undefined) delete process.env.BONFIRES_MEMORY_KERNEL_USE_FCG
       else process.env.BONFIRES_MEMORY_KERNEL_USE_FCG = prevUseFcg
+      if (prevCxnLibraryProfile === undefined)
+        delete process.env.BONFIRES_MEMORY_KERNEL_CXN_LIBRARY_PROFILE
+      else process.env.BONFIRES_MEMORY_KERNEL_CXN_LIBRARY_PROFILE = prevCxnLibraryProfile
+      if (prevCxnRecipePreselectLimit === undefined)
+        delete process.env.BONFIRES_MEMORY_KERNEL_CXN_RECIPE_PRESELECT_LIMIT
+      else
+        process.env.BONFIRES_MEMORY_KERNEL_CXN_RECIPE_PRESELECT_LIMIT = prevCxnRecipePreselectLimit
+      if (prevCxnRecipePreselectMinScore === undefined)
+        delete process.env.BONFIRES_MEMORY_KERNEL_CXN_RECIPE_PRESELECT_MIN_SCORE
+      else
+        process.env.BONFIRES_MEMORY_KERNEL_CXN_RECIPE_PRESELECT_MIN_SCORE =
+          prevCxnRecipePreselectMinScore
+      if (prevFcgTopicTopK === undefined) delete process.env.BONFIRES_MEMORY_KERNEL_FCG_TOPIC_TOP_K
+      else process.env.BONFIRES_MEMORY_KERNEL_FCG_TOPIC_TOP_K = prevFcgTopicTopK
+      if (prevFcgComprehensionAttemptLimit === undefined)
+        delete process.env.BONFIRES_MEMORY_KERNEL_FCG_COMPREHENSION_ATTEMPT_LIMIT
+      else
+        process.env.BONFIRES_MEMORY_KERNEL_FCG_COMPREHENSION_ATTEMPT_LIMIT =
+          prevFcgComprehensionAttemptLimit
+      if (prevFcgTopicSimilarityThreshold === undefined)
+        delete process.env.BONFIRES_MEMORY_KERNEL_FCG_TOPIC_SIMILARITY_THRESHOLD
+      else
+        process.env.BONFIRES_MEMORY_KERNEL_FCG_TOPIC_SIMILARITY_THRESHOLD =
+          prevFcgTopicSimilarityThreshold
+      if (prevFcgGrammarCacheSize === undefined)
+        delete process.env.BONFIRES_MEMORY_KERNEL_FCG_GRAMMAR_CACHE_SIZE
+      else process.env.BONFIRES_MEMORY_KERNEL_FCG_GRAMMAR_CACHE_SIZE = prevFcgGrammarCacheSize
       if (prevMissPolicy === undefined)
         delete process.env.BONFIRES_MEMORY_KERNEL_FCG_PRECISION_MISS_POLICY
       else process.env.BONFIRES_MEMORY_KERNEL_FCG_PRECISION_MISS_POLICY = prevMissPolicy
@@ -305,9 +430,7 @@ describe("armSearch", () => {
       else process.env.BONFIRES_MEMORY_KERNEL_FCG_LEARNING_TOP_EVIDENCE_K = prevTopEvidenceK
       if (prevSupportThreshold === undefined)
         delete process.env.BONFIRES_MEMORY_KERNEL_FCG_ABSTRACT_SUPPORT_THRESHOLD
-      else
-        process.env.BONFIRES_MEMORY_KERNEL_FCG_ABSTRACT_SUPPORT_THRESHOLD =
-          prevSupportThreshold
+      else process.env.BONFIRES_MEMORY_KERNEL_FCG_ABSTRACT_SUPPORT_THRESHOLD = prevSupportThreshold
       if (prevLearnedOverlay === undefined)
         delete process.env.BONFIRES_MEMORY_KERNEL_FCG_LEARNED_OVERLAY
       else process.env.BONFIRES_MEMORY_KERNEL_FCG_LEARNED_OVERLAY = prevLearnedOverlay
@@ -316,6 +439,8 @@ describe("armSearch", () => {
       else
         process.env.BONFIRES_MEMORY_KERNEL_FCG_LEARNED_OVERLAY_MIN_SCORE =
           prevLearnedOverlayMinScore
+      if (prevEcsSearch === undefined) delete process.env.BONFIRES_MEMORY_KERNEL_ECS_SEARCH_ENABLED
+      else process.env.BONFIRES_MEMORY_KERNEL_ECS_SEARCH_ENABLED = prevEcsSearch
     }
   })
 
@@ -341,7 +466,7 @@ describe("armSearch", () => {
         config: { ...baseCfg, arm: "hypermem" },
       })
 
-      expect(client.hypermemSearch.mock.calls[0][0].outputType).toBe("011")
+      expect(mockArg<{ outputType: string }>(client.hypermemSearch).outputType).toBe("011")
       expect(out.map((h) => h.kind)).toEqual(["episode", "fact"])
     } finally {
       if (prevOutputType === undefined) delete process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
@@ -926,7 +1051,7 @@ describe("armSearch", () => {
       }
       const out = await armSearch({
         client: client as unknown as Parameters<typeof armSearch>[0]["client"],
-        query: "What activities does Melanie partake in?",
+        query: "What activities does the speaker take part in?",
         config: { ...baseCfg, arm: "hypermem" },
       })
       expect(out[0].text).toBe(
@@ -1006,7 +1131,7 @@ describe("armSearch", () => {
       }
       const out = await armSearch({
         client: client as unknown as Parameters<typeof armSearch>[0]["client"],
-        query: "What activities does Melanie partake in?",
+        query: "What activities does the speaker take part in?",
         config: { ...baseCfg, arm: "hypermem" },
       })
       expect(out.map((hit) => hit.text)).toEqual([
@@ -1078,7 +1203,7 @@ describe("armSearch", () => {
               data: {
                 source_type: "entity_linkage",
                 content:
-                  "Within Recreational Activities, candidate linked items: pottery workshop. Evidence: Recreational Activities: Melanie found the pottery workshop relaxing.",
+                  "Within Recreational Activities, candidate linked items: pottery workshop. Evidence: Recreational Activities: Melanie found the pottery workshop calming.",
               },
             },
           ],
@@ -1086,11 +1211,11 @@ describe("armSearch", () => {
       }
       const out = await armSearch({
         client: client as unknown as Parameters<typeof armSearch>[0]["client"],
-        query: "What activities does Melanie partake in?",
+        query: "What activities does the speaker take part in?",
         config: { ...baseCfg, arm: "hypermem" },
       })
       expect(out.map((hit) => hit.text)).toEqual([
-        "[FACT] Within Recreational Activities, candidate linked items: pottery workshop. Evidence: Recreational Activities: Melanie found the pottery workshop relaxing.",
+        "[FACT] Within Recreational Activities, candidate linked items: pottery workshop. Evidence: Recreational Activities: Melanie found the pottery workshop calming.",
       ])
     } finally {
       if (prevOutputType === undefined) delete process.env.BONFIRES_HYPERMEM_OUTPUT_TYPE
