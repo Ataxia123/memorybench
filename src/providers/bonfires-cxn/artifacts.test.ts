@@ -4,8 +4,44 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { loadArtifacts } from "./artifacts"
 import type { CxnConfig } from "./config"
+import { VOYAGE_MODEL } from "./voyage"
 
-function fixtureConfig(): CxnConfig {
+function writeV2Fixtures(dir: string): { corpusPath: string; sessionTurnsPath: string; embeddingsPath: string } {
+  const corpusPath = join(dir, "corpus.json")
+  writeFileSync(
+    corpusPath,
+    JSON.stringify({
+      abc123abc123abc1: {
+        utterance: "hi",
+        ts: "2023-05-08T13:56:00Z",
+        actor_id: "Caroline",
+        session: "s1",
+        session_index: 0,
+        construct_ids: ["person.ask.v1"],
+      },
+    })
+  )
+  const sessionTurnsPath = join(dir, "turns.json")
+  writeFileSync(
+    sessionTurnsPath,
+    JSON.stringify({
+      s1: [{ ts: "2023-05-08T13:56:00Z", speaker: "Caroline", text: "hi", blip_caption: null }],
+    })
+  )
+  const embeddingsPath = join(dir, "embeddings.json")
+  writeFileSync(
+    embeddingsPath,
+    JSON.stringify({
+      model: VOYAGE_MODEL,
+      dim: 3,
+      statements: { abc123abc123abc1: [1, 0, 0] },
+      aggregates: { cxn: { "person.ask.v1": [1, 0, 0] }, episode: { s1: [1, 0, 0] } },
+    })
+  )
+  return { corpusPath, sessionTurnsPath, embeddingsPath }
+}
+
+function fixtureConfig(overrides: Partial<CxnConfig> = {}): CxnConfig {
   const dir = mkdtempSync(join(tmpdir(), "cxn-artifacts-"))
   writeFileSync(
     join(dir, "census.json"),
@@ -27,10 +63,15 @@ function fixtureConfig(): CxnConfig {
       abc123abc123abc1: { utterance: "hi", ts: "2023-05-08T13:56:00Z", actor_id: "Caroline", session: "s1" },
     })
   )
+  const { corpusPath, sessionTurnsPath, embeddingsPath } = writeV2Fixtures(dir)
   return {
     neo4jUri: "bolt://x", neo4jUser: "u", neo4jPassword: "p",
     groupId: "g", artifactsDir: dir, utteranceMapPath: mapPath,
     expectedNodes: 1, expectedEdges: 1, topKFirings: 20, maxSeedEntities: 12,
+    voyageApiKey: "key", corpusPath, sessionTurnsPath, embeddingsPath,
+    laneP: false, blendDense: 0.7, blendSparse: 0.3, poolK: 40, finalK: 20,
+    deltaCxn: 0.3, deltaEp: 0.3, hydrateTop: 5, hydrateWindow: 2,
+    ...overrides,
   }
 }
 
@@ -40,5 +81,44 @@ describe("loadArtifacts", () => {
     expect(artifacts.planRecordCount).toBe(3)
     expect(artifacts.entrenchmentByConstruct.get("person.ask.v1")).toBe(72)
     expect(artifacts.utteranceMap.get("abc123abc123abc1")?.actor_id).toBe("Caroline")
+  })
+
+  test("loads v2 statements/turns/vectors/aggregates maps", async () => {
+    const artifacts = await loadArtifacts(fixtureConfig())
+    expect(artifacts.statements?.get("abc123abc123abc1")?.session_index).toBe(0)
+    expect(artifacts.turns?.get("s1")?.[0]?.text).toBe("hi")
+    expect(artifacts.vectors?.get("abc123abc123abc1")).toEqual([1, 0, 0])
+    expect(artifacts.aggregates?.cxn.get("person.ask.v1")).toEqual([1, 0, 0])
+    expect(artifacts.aggregates?.episode.get("s1")).toEqual([1, 0, 0])
+  })
+
+  test("throws on embeddings model mismatch", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "cxn-artifacts-mismatch-"))
+    const cfg = fixtureConfig()
+    writeFileSync(
+      cfg.embeddingsPath!,
+      JSON.stringify({
+        model: "some-other-model",
+        dim: 3,
+        statements: { abc123abc123abc1: [1, 0, 0] },
+        aggregates: { cxn: {}, episode: {} },
+      })
+    )
+    void dir
+    await expect(loadArtifacts(cfg)).rejects.toThrow(/model mismatch/)
+  })
+
+  test("throws when a corpus hash has no embedding vector", async () => {
+    const cfg = fixtureConfig()
+    writeFileSync(
+      cfg.embeddingsPath!,
+      JSON.stringify({
+        model: VOYAGE_MODEL,
+        dim: 3,
+        statements: {},
+        aggregates: { cxn: {}, episode: {} },
+      })
+    )
+    await expect(loadArtifacts(cfg)).rejects.toThrow(/no embedding vector/)
   })
 })
