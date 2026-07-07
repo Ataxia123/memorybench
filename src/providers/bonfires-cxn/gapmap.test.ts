@@ -8,6 +8,7 @@ import {
   loadGapInputs,
   computeJunkSeedReport,
   computeRawTokenJunkCounts,
+  type GapInputs,
   type GapReport,
   type GapRunPaths,
 } from "./gapmap"
@@ -317,6 +318,94 @@ describe("classifyRun (via loadGapInputs, synthetic run-dir fixture)", () => {
       ].sort()
     )
     expect(inputs.allQuestionTexts).not.toContain(BOGUS_QUESTION_TEXT)
+  })
+})
+
+describe("Hit@20 (leg 2, decoupled from correctness)", () => {
+  // Reuses buildFixture() as-is (no new fixture questions) — the existing
+  // conv-26-q1/q2 pairing already exercises exactly the two required cases:
+  //   - conv-26-q1: correct, evidence D1:1 links to hash H1 (via stmt-1's
+  //     fold-plan utterance "Caroline greeted Mel."), but its results file
+  //     was written with retrievedHashes=[] — H1 never lands in the
+  //     retrieved set. Proves (a): total-but-not-hit, independent of the
+  //     judge verdict ("correct" here).
+  //   - conv-26-q2: a MISS (incorrect), same evidence D1:1 -> same hash H1,
+  //     but its results file was written with retrievedHashes=[H1] — a hit.
+  //     Proves (b): hit status is independent of miss classification (q2
+  //     stays answered_wrong, asserted in the existing 4-class test above).
+  test("correct question with unretrieved evidence counts toward total but not hits; missed question with retrieved evidence counts as a hit", async () => {
+    const fixture = buildFixture()
+    const inputs = await loadGapInputs(fixture)
+    const report = classifyRun(inputs)
+
+    // Pin (b) alongside Hit@20: q2 is still classified answered_wrong, not
+    // reclassified because it happens to be a Hit@20 hit.
+    expect(report.byCategory["multi-hop"]!.missByClass.answered_wrong).toBe(1)
+
+    // multi-hop = {q1 (correct, miss-on-retrieval), q2 (miss, hit)}: only q2
+    // hits, so hits=1/total=2.
+    expect(report.hitAt20.byCategory["multi-hop"]).toEqual({ hits: 1, total: 2 })
+    // single-hop = {q3 (H2 hydratable, retrievedHashes=[] -> not a hit), q4
+    // (stmt-3 links but zero plan records -> no hash to check -> not a hit)}.
+    expect(report.hitAt20.byCategory["single-hop"]).toEqual({ hits: 0, total: 2 })
+    // temporal = {q5 (D9:9 never links -> no hash -> not a hit)}.
+    expect(report.hitAt20.byCategory["temporal"]).toEqual({ hits: 0, total: 1 })
+
+    // Overall spans ALL 5 scored questions (correct + every miss class),
+    // not just misses: only q2 hits.
+    expect(report.hitAt20.overall).toEqual({ hits: 1, total: 5 })
+  })
+
+  test("N1: a single evidence array element joining two dia_ids with '; ' splits and links both (previously one unresolvable joined string)", () => {
+    const inputs: GapInputs = {
+      questions: [
+        {
+          questionId: "conv-26-q-semi",
+          questionType: "multi-hop",
+          correct: false,
+          evidence: ["D1:1; D1:2"],
+          retrievedHashes: [],
+        },
+      ],
+      batchMessages: [
+        { username: "Caroline", timestamp: "2023-05-08T13:56:00+00:00", metadata: { dia_id: "D1:1" } },
+        { username: "Caroline", timestamp: "2023-05-08T13:57:00+00:00", metadata: { dia_id: "D1:2" } },
+      ],
+      logRecords: [
+        { statement_id: "stmt-1", speaker: "Caroline", ts: "2023-05-08T13:56:00Z" },
+        { statement_id: "stmt-2", speaker: "Caroline", ts: "2023-05-08T13:57:00Z" },
+      ],
+      planRecords: [
+        {
+          correlation_id: "stmt-1",
+          utterance: "Caroline greeted Mel.",
+          event_ts: "2023-05-08T13:56:00Z",
+          actor_id: "Caroline",
+        },
+        {
+          correlation_id: "stmt-2#r0",
+          utterance: "Melanie felt supported.",
+          event_ts: "2023-05-08T13:57:00Z",
+          actor_id: "Caroline",
+        },
+      ],
+      utteranceMap: {},
+      allQuestionTexts: [],
+      incompleteQuestions: [],
+    }
+
+    const report = classifyRun(inputs)
+
+    // Both D1:1 and D1:2 resolve to real statements (stmt-1, stmt-2) via the
+    // split — neither dia_id is unresolvable, so the question is NOT
+    // unlinked. Before the split, "D1:1; D1:2" as one string would never
+    // match a batches message's dia_id and would classify unlinked.
+    expect(report.byCategory["multi-hop"]!.missByClass.unlinked).toBe(0)
+    expect(report.unlinkedEvidence).toEqual([])
+    // Both statements resolve but utteranceMap is empty here (no hydration
+    // fixture needed for this test) -> not_hydratable, which itself proves
+    // linkage succeeded (an unlinked question can never reach this class).
+    expect(report.byCategory["multi-hop"]!.missByClass.not_hydratable).toBe(1)
   })
 })
 

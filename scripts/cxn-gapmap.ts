@@ -95,6 +95,20 @@ function renderMarkdown(
     lines.push("")
   }
 
+  lines.push("## Hit@20", "")
+  lines.push(
+    "Decoupled from the judge verdict: a question \"hits\" iff ANY of its linked evidence hashes appears in its retrieved `metadata.utterance_hash` set. Computed over every scored question — correct answers included — because this measures pool quality (did the evidence land in the top-k at all), not answer conversion. A correct question can still miss here (the judge was satisfied by something else); a miss can still hit here (`answered_wrong` — the evidence was retrieved but the model got it wrong).",
+    ""
+  )
+  const hitRate = (h: { hits: number; total: number }): string => (h.total > 0 ? (h.hits / h.total).toFixed(4) : "n/a")
+  lines.push("| scope | hits | total | rate |", "|---|---|---|---|")
+  lines.push(`| overall | ${report.hitAt20.overall.hits} | ${report.hitAt20.overall.total} | ${hitRate(report.hitAt20.overall)} |`)
+  for (const key of Object.keys(report.hitAt20.byCategory).sort()) {
+    const h = report.hitAt20.byCategory[key]!
+    lines.push(`| ${key} | ${h.hits} | ${h.total} | ${hitRate(h)} |`)
+  }
+  lines.push("")
+
   lines.push("## By category", "")
   lines.push(
     "| category | total | correct | not_hydratable | not_retrieved | answered_wrong | unlinked |",

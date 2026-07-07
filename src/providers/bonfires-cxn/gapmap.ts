@@ -67,6 +67,19 @@ export interface GapReport {
   // array to begin with (vacuously unlinked, no dia_id to report as failed —
   // M3). A sub-count of byCategory[*].missByClass.unlinked, not a new class.
   emptyEvidenceUnlinkedCount: number
+  // Hit@20, decoupled from the judge verdict (leg 2): a question "hits" iff
+  // ANY of its linked evidence hashes appears in its retrieved
+  // metadata.utterance_hash set. Computed over EVERY scored question in
+  // `inputs.questions` — correct ones included — because this measures pool
+  // quality (did the evidence even land in the retrieved set), not answer
+  // conversion. Deliberately independent of `correct`/`missByClass`: a
+  // correct question can still miss its evidence in the top-k (the judge may
+  // have been satisfied by something else), and a miss can still hit (the
+  // model saw the evidence but answered wrong — see `answered_wrong`).
+  hitAt20: {
+    overall: { hits: number; total: number }
+    byCategory: Record<string, { hits: number; total: number }>
+  }
   junkSeedReport: Array<{ name: string; questionCount: number }>
   unlinkedEvidence: string[]
 }
@@ -136,6 +149,22 @@ interface LinkageResult {
   hashes: Set<string>
 }
 
+// N1: LoCoMo occasionally joins multiple dia_ids into a single evidence array
+// element, e.g. "D8:6; D9:17" — one string, two references. Splitting them
+// out here (the evidence-iteration entry point, shared by every caller of
+// linkEvidence) means both the miss-classification chain and Hit@20 see the
+// same, correctly-split dia_id list; unsplit, the joined string can never
+// match a batches message's dia_id and silently counts as one unresolvable
+// evidence reference instead of two resolvable ones.
+function splitEvidenceIds(evidence: string[]): string[] {
+  return evidence.flatMap((entry) =>
+    entry
+      .split(/;\s*/)
+      .map((id) => id.trim())
+      .filter((id) => id.length > 0)
+  )
+}
+
 function linkEvidence(
   evidence: string[],
   batchMessages: BatchMessage[],
@@ -174,7 +203,7 @@ function linkEvidence(
   const unlinkedDiaIds: string[] = []
   const hashes = new Set<string>()
 
-  for (const diaId of evidence) {
+  for (const diaId of splitEvidenceIds(evidence)) {
     const message = messageByDiaId.get(diaId)
     if (!message) {
       unlinkedDiaIds.push(diaId)
@@ -199,43 +228,33 @@ function linkEvidence(
   return { linkedDiaIds, unlinkedDiaIds, hashes }
 }
 
-function classifyMiss(
-  question: GapQuestionResult,
-  batchMessages: BatchMessage[],
-  logRecords: ActivationLogRecord[],
-  planRecords: FoldPlanRecord[],
+// Miss classification from an already-computed linkage (see classifyRun,
+// which now computes linkage once per question and shares it with Hit@20 —
+// NOTE: an empty `evidence` array yields the same empty LinkageResult as a
+// non-empty-but-fully-unresolvable one, so the "no evidence at all" case
+// doesn't need a special early return here; both fall out of
+// `linkedDiaIds.length === 0` below identically to before this refactor.
+function classifyMissClass(
+  linkage: LinkageResult,
+  retrievedHashes: string[],
   utteranceMap: Record<string, UtteranceMapEntry>
-): { cls: MissClass; unlinkedDiaIds: string[] } {
-  if (question.evidence.length === 0) {
-    // No evidence to link against at all (LoCoMo world-knowledge/temporal
-    // questions occasionally ship an empty evidence array) — vacuously
-    // unlinked, no dia_ids to report as failed.
-    return { cls: "unlinked", unlinkedDiaIds: [] }
+): MissClass {
+  if (linkage.linkedDiaIds.length === 0) {
+    return "unlinked"
   }
 
-  const { linkedDiaIds, unlinkedDiaIds, hashes } = linkEvidence(
-    question.evidence,
-    batchMessages,
-    logRecords,
-    planRecords
-  )
-
-  if (linkedDiaIds.length === 0) {
-    return { cls: "unlinked", unlinkedDiaIds }
-  }
-
-  const hydratedHashes = [...hashes].filter((h) => Object.prototype.hasOwnProperty.call(utteranceMap, h))
+  const hydratedHashes = [...linkage.hashes].filter((h) => Object.prototype.hasOwnProperty.call(utteranceMap, h))
   if (hydratedHashes.length === 0) {
-    return { cls: "not_hydratable", unlinkedDiaIds }
+    return "not_hydratable"
   }
 
-  const retrieved = new Set(question.retrievedHashes)
+  const retrieved = new Set(retrievedHashes)
   const anyRetrieved = hydratedHashes.some((h) => retrieved.has(h))
   if (!anyRetrieved) {
-    return { cls: "not_retrieved", unlinkedDiaIds }
+    return "not_retrieved"
   }
 
-  return { cls: "answered_wrong", unlinkedDiaIds }
+  return "answered_wrong"
 }
 
 const EMPTY_MISS_BY_CLASS: Record<MissClass, number> = {
@@ -251,6 +270,8 @@ export function classifyRun(inputs: GapInputs): GapReport {
   const overall = { total, correct, score: total > 0 ? correct / total : 0 }
 
   const byCategory: Record<string, { total: number; correct: number; missByClass: Record<MissClass, number> }> = {}
+  const hitAt20ByCategory: Record<string, { hits: number; total: number }> = {}
+  const hitAt20Overall = { hits: 0, total: 0 }
   const unlinkedSet = new Set<string>()
   let emptyEvidenceUnlinkedCount = 0
 
@@ -264,25 +285,49 @@ export function classifyRun(inputs: GapInputs): GapReport {
       correct: 0,
       missByClass: { ...EMPTY_MISS_BY_CLASS },
     })
+    const hitCategory = (hitAt20ByCategory[question.questionType] ??= { hits: 0, total: 0 })
     category.total += 1
+
+    // Linkage is computed once per question (evidence dia_id -> hashes) and
+    // shared by both the 4-class miss taxonomy (correct questions skip it,
+    // see the `continue` below) and Hit@20 (which runs over EVERY scored
+    // question, correct included — Hit@20 measures whether the evidence
+    // landed in the retrieved pool at all, a strictly weaker and separate
+    // question from whether the judge was satisfied).
+    const linkage = linkEvidence(question.evidence, inputs.batchMessages, inputs.logRecords, inputs.planRecords)
+    const retrievedSet = new Set(question.retrievedHashes)
+    const isHit = [...linkage.hashes].some((h) => retrievedSet.has(h))
+    hitAt20Overall.total += 1
+    hitCategory.total += 1
+    if (isHit) {
+      hitAt20Overall.hits += 1
+      hitCategory.hits += 1
+    }
+
     if (question.correct) {
       category.correct += 1
       continue
     }
-    const { cls, unlinkedDiaIds } = classifyMiss(
-      question,
-      inputs.batchMessages,
-      inputs.logRecords,
-      inputs.planRecords,
-      inputs.utteranceMap
-    )
+
+    const cls = classifyMissClass(linkage, question.retrievedHashes, inputs.utteranceMap)
     category.missByClass[cls] += 1
     if (cls === "unlinked" && question.evidence.length === 0) emptyEvidenceUnlinkedCount += 1
-    for (const diaId of unlinkedDiaIds) unlinkedSet.add(diaId)
+    // unlinkedEvidence stays scoped to MISS-linkage failures only (not every
+    // question's linkage, even though linkage above now also runs for
+    // correct questions for Hit@20) — this loop only reaches here for
+    // question.correct === false, so a correct question's unresolvable
+    // dia_ids (if any) never enter unlinkedSet. Kept this way deliberately:
+    // unlinkedEvidence is a debugging aid for the miss taxonomy ("why didn't
+    // this dia_id classify"), not a general evidence-linkage health report;
+    // widening its scope would be a separate, explicit change.
+    for (const diaId of linkage.unlinkedDiaIds) unlinkedSet.add(diaId)
   }
 
   const sortedByCategory: typeof byCategory = {}
   for (const key of Object.keys(byCategory).sort()) sortedByCategory[key] = byCategory[key]!
+
+  const sortedHitAt20ByCategory: typeof hitAt20ByCategory = {}
+  for (const key of Object.keys(hitAt20ByCategory).sort()) sortedHitAt20ByCategory[key] = hitAt20ByCategory[key]!
 
   const unevaluatedIds = inputs.incompleteQuestions
     .filter((q) => q.reason === "unevaluated")
@@ -299,6 +344,7 @@ export function classifyRun(inputs: GapInputs): GapReport {
     incomplete: { unevaluated: unevaluatedIds.length, missingResults: missingResultsIds.length },
     incompleteIds: { unevaluated: unevaluatedIds, missingResults: missingResultsIds },
     emptyEvidenceUnlinkedCount,
+    hitAt20: { overall: hitAt20Overall, byCategory: sortedHitAt20ByCategory },
     junkSeedReport: computeJunkSeedReport(inputs.allQuestionTexts),
     unlinkedEvidence: [...unlinkedSet].sort(),
   }
