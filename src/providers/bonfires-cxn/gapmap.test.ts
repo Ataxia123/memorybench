@@ -9,6 +9,7 @@ import {
   computeJunkSeedReport,
   computeRawTokenJunkCounts,
   type GapReport,
+  type GapRunPaths,
 } from "./gapmap"
 
 // Mirrors memory_kernel/scripts/eval/emit_utterance_map.py's utterance_hash():
@@ -22,15 +23,9 @@ function utteranceHash(utterance: string): string {
 const H1 = utteranceHash("Caroline greeted Mel.")
 const H2 = utteranceHash("Melanie felt supported.")
 
-interface Fixture {
-  runDir: string
-  batchesPath: string
-  logPath: string
-  planPath: string
-  mapPath: string
-  evidenceByQuestionId: Record<string, string[]>
-  allQuestionTexts: string[]
-}
+type Fixture = GapRunPaths
+
+const BOGUS_QUESTION_TEXT = "This text must never appear in the run-scoped junk corpus."
 
 function buildFixture(): Fixture {
   const root = mkdtempSync(join(tmpdir(), "cxn-gapmap-"))
@@ -159,11 +154,82 @@ function buildFixture(): Fixture {
       "conv-26-q4": ["D1:3"],
       "conv-26-q5": ["D9:9"],
     },
-    allQuestionTexts: [
-      "When did Caroline go to the LGBTQ support group?",
-      "Is that true?",
-      "Who did Melanie support?",
-    ],
+    // "conv-26-q999" is deliberately NOT one of this run's questions (no
+    // checkpoint entry, no results file) — it pins M4: loadGapInputs must
+    // scope allQuestionTexts down to only the ids this run actually touched,
+    // not the full LoCoMo corpus passed in here.
+    questionTextById: {
+      "conv-26-q1": "When did Caroline go to the LGBTQ support group?",
+      "conv-26-q2": "Is that true?",
+      "conv-26-q3": "Who did Melanie support?",
+      "conv-26-q4": "Is it true that Caroline moved?",
+      "conv-26-q5": "Did Caroline think that was true?",
+      "conv-26-q999": BOGUS_QUESTION_TEXT,
+    },
+  }
+}
+
+// --- I2 fixture: builds a run-dir exercising both incomplete-run modes in
+// isolation from the main 5-question fixture above (so the existing
+// total===5 assertions aren't perturbed).
+//   - conv-26-p1: complete ("correct"), has a results file — normal.
+//   - conv-26-p2: checkpoint has NO evaluate label (status "pending") but
+//     DOES have a results file — I2a "unevaluated".
+//   - conv-26-p3: checkpoint has a completed evaluate label but NO
+//     results/<id>.json on disk at all — I2b "missingResults".
+function buildIncompleteFixture(): Fixture {
+  const root = mkdtempSync(join(tmpdir(), "cxn-gapmap-incomplete-"))
+  const runDir = join(root, "run")
+  const resultsDir = join(runDir, "results")
+  mkdirSync(resultsDir, { recursive: true })
+
+  writeFileSync(
+    join(runDir, "checkpoint.json"),
+    JSON.stringify({
+      questions: {
+        "conv-26-p1": { phases: { evaluate: { label: "correct" } } },
+        "conv-26-p2": { phases: { evaluate: { status: "pending" } } },
+        "conv-26-p3": { phases: { evaluate: { label: "incorrect" } } },
+      },
+    })
+  )
+
+  function writeResult(id: string): void {
+    writeFileSync(
+      join(resultsDir, `${id}.json`),
+      JSON.stringify({
+        questionId: id,
+        question: "irrelevant for classifyRun",
+        questionType: "misc",
+        groundTruth: "irrelevant",
+        containerTag: `${id}-run`,
+        timestamp: "2026-07-07T00:00:00.000Z",
+        durationMs: 1,
+        results: [],
+      })
+    )
+  }
+  writeResult("conv-26-p1")
+  writeResult("conv-26-p2")
+  // conv-26-p3 deliberately has no results/<id>.json.
+
+  writeFileSync(join(root, "batches.json"), JSON.stringify([]))
+  writeFileSync(join(root, "activation_log.jsonl"), "")
+  writeFileSync(join(root, "fold_plan.jsonl"), "")
+  writeFileSync(join(root, "map.json"), JSON.stringify({}))
+
+  return {
+    runDir,
+    batchesPath: join(root, "batches.json"),
+    logPath: join(root, "activation_log.jsonl"),
+    planPath: join(root, "fold_plan.jsonl"),
+    mapPath: join(root, "map.json"),
+    evidenceByQuestionId: {},
+    questionTextById: {
+      "conv-26-p1": "p1 is complete and correct",
+      "conv-26-p2": "p2 has no evaluate label yet",
+      "conv-26-p3": "p3 has a label but no results file",
+    },
   }
 }
 
@@ -174,6 +240,9 @@ describe("classifyRun (via loadGapInputs, synthetic run-dir fixture)", () => {
     const report: GapReport = classifyRun(inputs)
 
     expect(report.overall).toEqual({ total: 5, correct: 1, score: 0.2 })
+    expect(report.incomplete).toEqual({ unevaluated: 0, missingResults: 0 })
+    expect(report.incompleteIds).toEqual({ unevaluated: [], missingResults: [] })
+    expect(report.emptyEvidenceUnlinkedCount).toBe(0)
 
     expect(report.byCategory["multi-hop"]).toEqual({
       total: 2,
@@ -229,6 +298,71 @@ describe("classifyRun (via loadGapInputs, synthetic run-dir fixture)", () => {
     expect(report.byCategory["world-knowledge"]!.missByClass.unlinked).toBe(1)
     expect(report.unlinkedEvidence).not.toContain(undefined as unknown as string)
     expect(report.unlinkedEvidence).toEqual(["D9:9"])
+    // conv-26-q99 (pushed here with evidence: []) is the only empty-evidence
+    // unlinked miss — conv-26-q5's D9:9 evidence is non-empty, it just fails
+    // to link (M3).
+    expect(report.emptyEvidenceUnlinkedCount).toBe(1)
+  })
+
+  test("junk-seed corpus is scoped to this run's questionIds, not the full LoCoMo corpus (M4)", async () => {
+    const fixture = buildFixture()
+    const inputs = await loadGapInputs(fixture)
+    expect([...inputs.allQuestionTexts].sort()).toEqual(
+      [
+        "When did Caroline go to the LGBTQ support group?",
+        "Is that true?",
+        "Who did Melanie support?",
+        "Is it true that Caroline moved?",
+        "Did Caroline think that was true?",
+      ].sort()
+    )
+    expect(inputs.allQuestionTexts).not.toContain(BOGUS_QUESTION_TEXT)
+  })
+})
+
+describe("incomplete-run handling (I2)", () => {
+  test("a checkpoint question with no evaluate label is excluded from classification and counted as incomplete.unevaluated", async () => {
+    const fixture = buildIncompleteFixture()
+    const inputs = await loadGapInputs(fixture)
+
+    // conv-26-p2 must not appear as a GapQuestionResult at all.
+    expect(inputs.questions.map((q) => q.questionId)).toEqual(["conv-26-p1"])
+    expect(inputs.incompleteQuestions).toContainEqual({ questionId: "conv-26-p2", reason: "unevaluated" })
+
+    const report = classifyRun(inputs)
+    expect(report.incomplete.unevaluated).toBe(1)
+    expect(report.incompleteIds.unevaluated).toEqual(["conv-26-p2"])
+  })
+
+  test("a checkpoint question with a completed label but no results file is counted as incomplete.missingResults, not dropped", async () => {
+    const fixture = buildIncompleteFixture()
+    const inputs = await loadGapInputs(fixture)
+
+    expect(inputs.incompleteQuestions).toContainEqual({ questionId: "conv-26-p3", reason: "missingResults" })
+
+    const report = classifyRun(inputs)
+    expect(report.incomplete.missingResults).toBe(1)
+    expect(report.incompleteIds.missingResults).toEqual(["conv-26-p3"])
+  })
+
+  test("overall.total counts only the questions that entered scoring (correct + classified misses), excluding both incomplete modes", async () => {
+    const fixture = buildIncompleteFixture()
+    const inputs = await loadGapInputs(fixture)
+    const report = classifyRun(inputs)
+
+    // Only conv-26-p1 (correct) enters scoring; p2 (unevaluated) and p3
+    // (missingResults) are excluded from total/byCategory entirely.
+    expect(report.overall).toEqual({ total: 1, correct: 1, score: 1 })
+    expect(report.incomplete).toEqual({ unevaluated: 1, missingResults: 1 })
+    expect(report.byCategory["misc"]).toEqual({
+      total: 1,
+      correct: 1,
+      missByClass: { not_hydratable: 0, not_retrieved: 0, answered_wrong: 0, unlinked: 0 },
+    })
+
+    // The run-scoped junk corpus still includes all three ids (search ran
+    // for p1/p2; p3 is tracked via checkpoint even without a results file).
+    expect(inputs.allQuestionTexts.length).toBe(3)
   })
 })
 
