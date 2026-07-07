@@ -56,7 +56,12 @@ describe("preflight", () => {
   })
 
   test("clear refuses to touch the KG", async () => {
-    const provider = new BonfiresCxnProvider(config(), artifacts(), fakeDeps({ nodes: 2, edges: 1, firings: 1 }))
-    await provider.clear("anything") // must resolve without running any Cypher write
+    const forbidden: CxnDeps = {
+      runCypher: async () => {
+        throw new Error("clear() must never run Cypher")
+      },
+    }
+    const provider = new BonfiresCxnProvider(config(), artifacts(), forbidden)
+    await provider.clear("anything") // resolves ONLY if clear never touches the deps
   })
 })
