@@ -11,6 +11,16 @@ import type { UnifiedSession } from "../../types/unified"
 import { logger } from "../../utils/logger"
 import { loadCxnConfig, type CxnConfig } from "./config"
 import { loadArtifacts, type CxnArtifacts } from "./artifacts"
+import { FIRING_STRUCTURES, NEIGHBORS_TO_FIRINGS, SEED_ENTITIES, SEEDS_TO_FIRINGS } from "./cypher"
+import {
+  assembleResults,
+  buildCxnAnswerPrompt,
+  buildStructureItem,
+  extractTerms,
+  rankFirings,
+  type CandidateFiring,
+  type StructureLine,
+} from "./retrieval"
 
 export interface CxnDeps {
   runCypher: (query: string, params: Record<string, unknown>) => Promise<Record<string, unknown>[]>
@@ -46,6 +56,7 @@ function driverDeps(driver: Driver): CxnDeps {
 export class BonfiresCxnProvider implements Provider {
   name = "bonfires-cxn"
   concurrency = { default: 5, ingest: 1 }
+  prompts = { answerPrompt: buildCxnAnswerPrompt }
 
   private cfg: CxnConfig | null
   private artifacts: CxnArtifacts | null
@@ -117,8 +128,71 @@ export class BonfiresCxnProvider implements Provider {
     onProgress?.({ completedIds: result.documentIds, failedIds: [], total: result.documentIds.length })
   }
 
-  async search(_query: string, _options: SearchOptions): Promise<unknown[]> {
-    throw new Error("bonfires-cxn: search lands in Task 4")
+  async search(query: string, _options: SearchOptions): Promise<unknown[]> {
+    const { cfg, artifacts, deps } = this.requireState()
+    const terms = extractTerms(query)
+    if (terms.length === 0) return []
+
+    const seeds = await deps.runCypher(SEED_ENTITIES, {
+      groupId: cfg.groupId,
+      terms,
+      maxSeeds: neo4j.int(cfg.maxSeedEntities),
+    })
+    const seedUuids = seeds.map((row) => String(row.uuid))
+    if (seedUuids.length === 0) return []
+
+    const candidateByUuid = new Map<string, CandidateFiring>()
+    for (const template of [SEEDS_TO_FIRINGS, NEIGHBORS_TO_FIRINGS]) {
+      const rows = await deps.runCypher(template, { groupId: cfg.groupId, seedUuids })
+      for (const row of rows) {
+        const attrs = JSON.parse(String(row.attributes ?? "{}")) as {
+          utterance_hash?: string
+          ts?: string
+        }
+        if (!attrs.utterance_hash) continue
+        const uuid = String(row.uuid)
+        const matched = (row.matchedSeeds as unknown[]).map(String)
+        const existing = candidateByUuid.get(uuid)
+        if (existing) {
+          for (const seed of matched) existing.matchedSeeds.add(seed)
+        } else {
+          candidateByUuid.set(uuid, {
+            uuid,
+            constructId: String(row.name).split("@")[0] ?? "",
+            utteranceHash: attrs.utterance_hash,
+            ts: attrs.ts ?? "",
+            matchedSeeds: new Set(matched),
+          })
+        }
+      }
+    }
+
+    const ranked = rankFirings([...candidateByUuid.values()], artifacts.entrenchmentByConstruct, cfg.topKFirings)
+    if (ranked.length === 0) return []
+
+    const structureRows = await deps.runCypher(FIRING_STRUCTURES, {
+      groupId: cfg.groupId,
+      firingUuids: ranked.map((f) => f.uuid),
+    })
+    const structuresByEvent = new Map<string, StructureLine>()
+    for (const row of structureRows) {
+      const key = String(row.eventUuid)
+      const attrs = JSON.parse(String(row.eventAttributes ?? "{}")) as { predicate?: string; ts?: string }
+      const firing = candidateByUuid.get(String(row.firingUuid))
+      const line = structuresByEvent.get(key) ?? {
+        firingUuid: String(row.firingUuid),
+        predicate: attrs.predicate ?? "",
+        roles: [],
+        ts: firing?.ts ?? "",
+        constructId: firing?.constructId ?? "",
+      }
+      line.roles.push({ role: String(row.role), filler: String(row.filler) })
+      structuresByEvent.set(key, line)
+    }
+
+    const utteranceResults = assembleResults(ranked, artifacts.utteranceMap, [])
+    const structureItem = buildStructureItem([...structuresByEvent.values()])
+    return [...utteranceResults, structureItem]
   }
 
   async clear(containerTag: string): Promise<void> {
