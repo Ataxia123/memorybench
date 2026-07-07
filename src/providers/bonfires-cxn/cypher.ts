@@ -7,7 +7,7 @@ MATCH (n:Entity {group_id: $groupId})
 WHERE NOT n:Entity_Firing AND NOT n:Entity_Event AND NOT n:Entity_JointActivation
   AND any(t IN $terms WHERE toLower(n.name) = t OR t IN split(toLower(n.name), ' '))
 WITH n
-OPTIONAL MATCH (n)-[r]-()
+OPTIONAL MATCH (n)-[r]-(m:Entity {group_id: $groupId})
 WITH n, count(r) AS degree
 RETURN n.uuid AS uuid, n.name AS name, degree
 ORDER BY degree DESC, n.uuid ASC

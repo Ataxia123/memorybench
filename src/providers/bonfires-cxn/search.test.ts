@@ -65,3 +65,13 @@ describe("search", () => {
     expect(JSON.stringify(a)).toBe(JSON.stringify(b))
   })
 })
+
+describe("cypher templates", () => {
+  test("every node pattern is group-scoped — no anonymous ungrouped endpoints", () => {
+    for (const template of [SEED_ENTITIES, SEEDS_TO_FIRINGS, NEIGHBORS_TO_FIRINGS, FIRING_STRUCTURES]) {
+      expect(template).not.toMatch(/-\(\)/)          // no bare anonymous endpoint
+      expect(template).not.toMatch(/\(\)-/)
+    }
+    expect(SEED_ENTITIES).toContain("(n)-[r]-(m:Entity {group_id: $groupId})")
+  })
+})
