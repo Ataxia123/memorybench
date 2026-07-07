@@ -128,14 +128,20 @@ const DAYS_IN_MONTH = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
 export function temporalWindow(question: string): { fromTs: string; toTs: string } | null {
   const lower = question.toLowerCase()
   const yearMatch = /\b(20\d{2})\b/.exec(lower)
-  const monthIndex = MONTHS.findIndex((month) => new RegExp(`\\b${month}\\b`).test(lower))
+  const monthIndex = MONTHS.findIndex((month) => {
+    if (month === "may") {
+      return /\b(?:in|of|during|last|this|next)\s+may\b/.test(lower) || /\bmay\s*,?\s*\d/.test(lower)
+    }
+    return new RegExp(`\\b${month}\\b`).test(lower)
+  })
   if (monthIndex < 0 && !yearMatch) return null
   const year = yearMatch ? Number(yearMatch[1]) : 2023   // corpus year when only a month is named
   if (monthIndex >= 0) {
     const mm = String(monthIndex + 1).padStart(2, "0")
+    const daysInMonth = monthIndex === 1 && (year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)) ? 29 : DAYS_IN_MONTH[monthIndex]
     return {
       fromTs: `${year}-${mm}-01T00:00:00Z`,
-      toTs: `${year}-${mm}-${String(DAYS_IN_MONTH[monthIndex]).padStart(2, "0")}T23:59:59Z`,
+      toTs: `${year}-${mm}-${String(daysInMonth).padStart(2, "0")}T23:59:59Z`,
     }
   }
   return { fromTs: `${year}-01-01T00:00:00Z`, toTs: `${year}-12-31T23:59:59Z` }
@@ -155,6 +161,7 @@ export function applyTemporalBoost(
 
 // ---------- reply expansion ----------
 
+// pool must arrive score-ordered — "top parents" = first N entries; the caller (provider search) sorts before calling.
 export function isAskShape(entry: StatementEntry): boolean {
   if (entry.construct_ids.some((cid) => cid.startsWith("person.ask."))) return true
   return /\basked?\b/i.test(entry.utterance)

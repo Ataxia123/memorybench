@@ -69,6 +69,18 @@ describe("temporal gate", () => {
     expect(temporalWindow("When did Caroline adopt the puppy?")).toBeNull()
   })
 
+  test("modal 'may' does not open a window; month 'May' forms do", () => {
+    expect(temporalWindow("What may have happened next?")).toBeNull()
+    expect(temporalWindow("May I ask something?")).toBeNull()
+    expect(temporalWindow("What happened in May?")).not.toBeNull()
+    expect(temporalWindow("What happened on May 23, 2023?")).not.toBeNull()
+  })
+
+  test("february window respects leap years", () => {
+    expect(temporalWindow("What happened in February 2024?")!.toTs).toBe("2024-02-29T23:59:59Z")
+    expect(temporalWindow("What happened in February 2023?")!.toTs).toBe("2023-02-28T23:59:59Z")
+  })
+
   test("boost applies inside window only", () => {
     const statements = new Map([
       ["in", stmt({ hash: "in", ts: "2023-06-10T00:00:00Z" })],
