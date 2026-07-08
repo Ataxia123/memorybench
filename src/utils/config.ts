@@ -72,6 +72,9 @@ export function getProviderConfig(provider: string): { apiKey: string; baseUrl?:
     case "bonfires-cxn":
       // Reads its own CXN_* env in loadCxnConfig(); the framework contract only needs a non-empty apiKey.
       return { apiKey: "none" }
+    case "bonfires-kernel":
+      // Reads its own KERNELB_* env in loadKernelConfig(); the framework contract only needs a non-empty apiKey.
+      return { apiKey: "none" }
     default:
       throw new Error(`Unknown provider: ${provider}`)
   }
