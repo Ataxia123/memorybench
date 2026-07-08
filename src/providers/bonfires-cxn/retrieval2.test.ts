@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import {
   applyTemporalBoost, blendScores, bm25Scores, buildAnswerPromptV2, buildBm25,
-  denseScores, hydrationLines, isAskShape, lanePBoost, replyExpansion,
+  denseScores, hydrationLines, isAskShape, lanePBoost, mmrSelect, replyExpansion,
   temporalWindow, type StatementEntry,
 } from "./retrieval2"
 
@@ -136,5 +136,36 @@ describe("answer prompt v2", () => {
     expect(prompt).toContain("before")
     expect(prompt).toContain("When?")
     expect(prompt).toContain("2023-07-01")
+  })
+})
+
+describe("mmrSelect (leg 5)", () => {
+  const vectors = new Map<string, number[]>([
+    ["a", [1, 0]], ["b", [1, 0]], ["c", [0, 1]],
+  ])
+  const vectorOf = (id: string) => vectors.get(id)
+  const scores = new Map<string, number>([["a", 1.0], ["b", 0.9], ["c", 0.5]])
+
+  test("high lambda picks the diverse item over the redundant one", () => {
+    // minmax: a=1, b=0.8, c=0. lambda=1: b => 0.8-1*cos(b,a)= -0.2 ; c => 0-1*0 = 0 -> c wins
+    const picked = mmrSelect(scores, vectorOf, 2, 1.0).map(([id]) => id)
+    expect(picked).toEqual(["a", "c"])
+  })
+  test("low lambda keeps score order", () => {
+    // lambda=0.1: b => 0.8-0.1 = 0.7 ; c => 0 -> b wins
+    const picked = mmrSelect(scores, vectorOf, 2, 0.1).map(([id]) => id)
+    expect(picked).toEqual(["a", "b"])
+  })
+  test("returns ORIGINAL scores, selection order, and caps at pool size", () => {
+    const out = mmrSelect(scores, vectorOf, 10, 0.3)
+    expect(out.length).toBe(3)
+    expect(out[0]).toEqual(["a", 1.0])
+    expect(new Set(out.map(([id]) => id))).toEqual(new Set(["a", "b", "c"]))
+  })
+  test("first-pick tie breaks by id asc; missing vector throws naming the id", () => {
+    const tied = new Map([["z", 1.0], ["y", 1.0]])
+    const flat = (id: string) => (id === "z" || id === "y" ? [1, 0] : undefined)
+    expect(mmrSelect(tied, flat, 1, 0.3)[0]![0]).toBe("y")
+    expect(() => mmrSelect(new Map([["a", 1], ["ghost", 0.5]]), vectorOf, 2, 0.3)).toThrow(/ghost/)
   })
 })

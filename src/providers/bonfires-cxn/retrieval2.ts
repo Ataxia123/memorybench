@@ -96,6 +96,40 @@ export function blendScores(
   return out
 }
 
+// Leg-5 lane B1 (spec §0.4): diversity-aware final-K selection for list-shape
+// questions. Reorders WITHIN the pool — never imports new candidates.
+export function mmrSelect(
+  poolScores: Map<string, number>,
+  vectorOf: (id: string) => number[] | undefined,
+  finalK: number,
+  lambda: number
+): Array<[string, number]> {
+  const relevance = minMax(poolScores)
+  const candidates = [...poolScores.keys()].sort(
+    (a, b) => (relevance.get(b)! - relevance.get(a)!) || (a < b ? -1 : 1)
+  )
+  for (const id of candidates) {
+    if (!vectorOf(id)) throw new Error(`bonfires-cxn: mmrSelect candidate ${id} has no vector`)
+  }
+  const selected: string[] = []
+  const remaining = new Set(candidates)
+  while (selected.length < Math.min(finalK, candidates.length)) {
+    let best: string | null = null
+    let bestValue = -Infinity
+    for (const id of candidates) {
+      if (!remaining.has(id)) continue
+      let maxSim = 0
+      for (const s of selected) maxSim = Math.max(maxSim, cosine(vectorOf(id)!, vectorOf(s)!))
+      const value = relevance.get(id)! - lambda * maxSim
+      if (value > bestValue) { bestValue = value; best = id }
+      // ties resolve to the earlier candidate (higher relevance, then id asc) via strict >
+    }
+    selected.push(best!)
+    remaining.delete(best!)
+  }
+  return selected.map((id) => [id, poolScores.get(id)!])
+}
+
 // ---------- Lane P ----------
 
 export interface Aggregates { cxn: Map<string, number[]>; episode: Map<string, number[]> }
@@ -161,7 +195,7 @@ export function temporalWindow(question: string): { fromTs: string; toTs: string
 }
 
 export function applyTemporalBoost(
-  scores: Map<string, number>, statements: Map<string, StatementEntry>,
+  scores: Map<string, number>, statements: Map<string, { ts: string }>,
   window: { fromTs: string; toTs: string }, boost: number
 ): Map<string, number> {
   const out = new Map<string, number>()
