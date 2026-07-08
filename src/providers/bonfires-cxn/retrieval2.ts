@@ -60,6 +60,24 @@ export function bm25Scores(index: Bm25Index, query: string): Map<string, number>
   return scores
 }
 
+export function bm25ScoresWeighted(index: Bm25Index, termWeights: Map<string, number>): Map<string, number> {
+  const scores = new Map<string, number>()
+  for (const [term, weight] of termWeights) {
+    if (weight <= 0) continue
+    const documentFrequency = index.df.get(term)
+    if (!documentFrequency) continue
+    const idf = Math.log(1 + (index.count - documentFrequency + 0.5) / (documentFrequency + 0.5))
+    for (const [hash, tf] of index.docTokens) {
+      const frequency = tf.get(term)
+      if (!frequency) continue
+      const length = index.docLength.get(hash) ?? 0
+      const denominator = frequency + K1 * (1 - B + (B * length) / index.avgLength)
+      scores.set(hash, (scores.get(hash) ?? 0) + weight * idf * ((frequency * (K1 + 1)) / denominator))
+    }
+  }
+  return scores
+}
+
 // ---------- dense + blend ----------
 
 import { cosine } from "./voyage"
@@ -70,7 +88,7 @@ export function denseScores(queryVector: number[], vectors: Map<string, number[]
   return scores
 }
 
-function minMax(scores: Map<string, number>): Map<string, number> {
+export function minMax(scores: Map<string, number>): Map<string, number> {
   if (scores.size === 0) return scores
   let min = Infinity, max = -Infinity
   for (const value of scores.values()) { min = Math.min(min, value); max = Math.max(max, value) }
@@ -125,6 +143,15 @@ export function lanePBoost(
 const MONTHS = ["january","february","march","april","may","june","july","august","september","october","november","december"]
 const DAYS_IN_MONTH = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
 
+export function monthWindow(year: number, monthIndex: number): { fromTs: string; toTs: string } {
+  const mm = String(monthIndex + 1).padStart(2, "0")
+  const daysInMonth = monthIndex === 1 && (year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)) ? 29 : DAYS_IN_MONTH[monthIndex]
+  return {
+    fromTs: `${year}-${mm}-01T00:00:00Z`,
+    toTs: `${year}-${mm}-${String(daysInMonth).padStart(2, "0")}T23:59:59Z`,
+  }
+}
+
 export function temporalWindow(question: string): { fromTs: string; toTs: string } | null {
   const lower = question.toLowerCase()
   const yearMatch = /\b(20\d{2})\b/.exec(lower)
@@ -136,14 +163,7 @@ export function temporalWindow(question: string): { fromTs: string; toTs: string
   })
   if (monthIndex < 0 && !yearMatch) return null
   const year = yearMatch ? Number(yearMatch[1]) : 2023   // corpus year when only a month is named
-  if (monthIndex >= 0) {
-    const mm = String(monthIndex + 1).padStart(2, "0")
-    const daysInMonth = monthIndex === 1 && (year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)) ? 29 : DAYS_IN_MONTH[monthIndex]
-    return {
-      fromTs: `${year}-${mm}-01T00:00:00Z`,
-      toTs: `${year}-${mm}-${String(daysInMonth).padStart(2, "0")}T23:59:59Z`,
-    }
-  }
+  if (monthIndex >= 0) return monthWindow(year, monthIndex)
   return { fromTs: `${year}-01-01T00:00:00Z`, toTs: `${year}-12-31T23:59:59Z` }
 }
 
@@ -226,17 +246,24 @@ export function hydrationLines(
 
 // ---------- answer prompt ----------
 
-export function buildAnswerPromptV2(question: string, context: unknown[], questionDate?: string): string {
+function buildAnswerPromptCore(
+  question: string, context: unknown[], questionDate: string | undefined, honorDirectives: boolean
+): string {
   const utterances: string[] = []
   const contextLines: string[] = []
+  let directive: string | null = null
   for (const item of context) {
     if (!item || typeof item !== "object") continue
     const record = item as Record<string, unknown>
     if (record.kind === "cxn_utterance" && typeof record.text === "string") utterances.push(record.text)
     if (record.kind === "cxn_context" && Array.isArray(record.lines)) {
       for (const line of record.lines) contextLines.push(String(line))
+      if (honorDirectives && !directive && typeof record.directive === "string" && record.directive.length > 0) {
+        directive = record.directive
+      }
     }
   }
+  const directiveBlock = directive ? `\nANSWER DIRECTIVE:\n${directive}\n` : ""
   const dateLine = questionDate ? `\nThe question is asked on: ${questionDate}` : ""
   return `You are answering a question about a two-person conversation using retrieved evidence.
 
@@ -245,9 +272,17 @@ ${utterances.join("\n")}
 
 CONTEXT WINDOW (raw conversation turns around the strongest evidence; may include image descriptions):
 ${contextLines.join("\n")}
-${dateLine}
+${directiveBlock}${dateLine}
 
 Question: ${question}
 
 Answer concisely using ONLY the evidence and context above. If they do not contain the answer, say "Not enough information."`
+}
+
+export function buildAnswerPromptV2(question: string, context: unknown[], questionDate?: string): string {
+  return buildAnswerPromptCore(question, context, questionDate, false)
+}
+
+export function buildAnswerPromptV3(question: string, context: unknown[], questionDate?: string): string {
+  return buildAnswerPromptCore(question, context, questionDate, true)
 }
