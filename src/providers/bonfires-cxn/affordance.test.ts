@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import {
-  answerDirective, combineSparse, isFallback, seededTermWeights,
+  answerDirective, directivePreamble, combineSparse, isFallback, seededTermWeights,
   strataBoost, temporalWindowFromDates, type Comprehension,
 } from "./affordance"
 import { bm25ScoresWeighted, buildBm25, buildAnswerPromptV2, buildAnswerPromptV3, monthWindow, type StatementEntry } from "./retrieval2"
@@ -75,9 +75,31 @@ describe("seeded sparse lane", () => {
 describe("answer directive + fallback + prompt v3", () => {
   test("closed map", () => {
     expect(answerDirective("when")).toContain("date or time")
-    expect(answerDirective("list")).toContain("ALL items")
+    expect(answerDirective("list")).toContain("ALL distinct items")
     expect(answerDirective("how_many")).toContain("quantity")
     expect(answerDirective(null)).toBeNull()
+  })
+  test("v2 strings: inference, list, when, how_long; how_many/entity unchanged", () => {
+    expect(answerDirective("inference")).toBe(
+      "This is an inference question. Reason from the evidence to a definite answer (e.g. yes/no or likely/unlikely) with a brief reason. Do NOT answer 'Not enough information' if the evidence supports a reasonable inference."
+    )
+    expect(answerDirective("list")).toBe(
+      "The question asks for multiple items. Enumerate ALL distinct items supported by the evidence and the context window; do not stop at the first. Do not add items of a kind the question did not ask about."
+    )
+    expect(answerDirective("when")).toBe(
+      "The question asks for a specific date or time. Resolve relative references in the evidence ('last Saturday', 'the week before') against that message's own timestamp, then answer with the most specific absolute date supported."
+    )
+    expect(answerDirective("how_long")).toBe(
+      "Answer with the duration AND its absolute anchor (e.g. 'since 2016'), derived from the evidence timestamps if needed."
+    )
+    expect(answerDirective("how_many")).toBe("Answer with a specific quantity or duration.")
+    expect(answerDirective("what")).toBe("Answer with the specific entity or fact, concisely.")
+    expect(answerDirective(null)).toBeNull()
+  })
+  test("directivePreamble is the pinned two-sentence string", () => {
+    expect(directivePreamble()).toBe(
+      "State the concrete fact(s) in the evidence's own words rather than a vague paraphrase. Answer 'Not enough information' ONLY when the evidence and context contain nothing relevant to the question."
+    )
   })
   test("isFallback true only when everything is empty", () => {
     expect(isFallback(comp({}))).toBe(true)

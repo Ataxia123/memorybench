@@ -84,14 +84,19 @@ export function combineSparse(
   return out
 }
 
+// Leg-4 v2 (spec 2026-07-08 §0.2): strings are part of the recipe — change
+// them only with a spec amendment and a directiveVersion bump.
 export function answerDirective(whSlot: string | null): string | null {
   switch (whSlot) {
     case "when":
-      return "The question asks for a specific date or time. Answer with the most specific date or time supported by the evidence; derive it from the evidence timestamps if needed."
+      return "The question asks for a specific date or time. Resolve relative references in the evidence ('last Saturday', 'the week before') against that message's own timestamp, then answer with the most specific absolute date supported."
     case "list":
-      return "The question asks for multiple items. Enumerate ALL items supported by the evidence."
-    case "how_many":
+      return "The question asks for multiple items. Enumerate ALL distinct items supported by the evidence and the context window; do not stop at the first. Do not add items of a kind the question did not ask about."
+    case "inference":
+      return "This is an inference question. Reason from the evidence to a definite answer (e.g. yes/no or likely/unlikely) with a brief reason. Do NOT answer 'Not enough information' if the evidence supports a reasonable inference."
     case "how_long":
+      return "Answer with the duration AND its absolute anchor (e.g. 'since 2016'), derived from the evidence timestamps if needed."
+    case "how_many":
       return "Answer with a specific quantity or duration."
     case "who":
     case "where":
@@ -101,4 +106,9 @@ export function answerDirective(whSlot: string | null): string | null {
     default:
       return null
   }
+}
+
+// Rides every slot directive; NEVER emitted alone (spec Decision 2).
+export function directivePreamble(): string {
+  return "State the concrete fact(s) in the evidence's own words rather than a vague paraphrase. Answer 'Not enough information' ONLY when the evidence and context contain nothing relevant to the question."
 }

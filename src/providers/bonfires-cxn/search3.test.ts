@@ -47,6 +47,7 @@ interface ContextItemV3 {
     qSeedEntityW?: number
     qSeedVerbW?: number
     qSeedLaneW?: number
+    directiveVersion?: number
     affordancesFired?: string[]
     fallback?: boolean
     comprehend?: { probe: string; matched_cxn_ids: string[]; wh_slot: string | null } | null
@@ -433,7 +434,7 @@ describe("search v3 — seed channel", () => {
 })
 
 describe("search v3 — answer channel + fallback", () => {
-  test("wh_slot 'when' -> directive mentions date/time and q:answer fires", async () => {
+  test("wh_slot 'when' -> directive starts with preamble + newline + contains absolute date; directiveVersion 2", async () => {
     const artifacts = fixtureParity()
     const comprehension: Comprehension = { ...EMPTY_COMPREHENSION, wh_slot: "when" }
     const { fetchImpl } = routingFetch({ vector: [1, 0], comprehension })
@@ -442,8 +443,22 @@ describe("search v3 — answer channel + fallback", () => {
       "xyzzy", { containerTag: "t" }
     )
     const context = results.filter(isContext)[0]!
-    expect(context.directive).toContain("date or time")
+    expect(context.directive).toContain("State the concrete fact(s)")
+    expect(context.directive).toContain("\n")
+    expect(context.directive).toContain("absolute date")
     expect(context.recipe.affordancesFired).toContain("q:answer")
+    expect(context.recipe.directiveVersion).toBe(2)
+  })
+
+  test("q:false control parity: directiveVersion undefined, deep-equals q:false baseline", async () => {
+    const artifacts = fixtureParity()
+    const { fetchImpl } = routingFetch({ vector: [1, 0] })
+    const cfg = baseConfigV3({ q: false })
+    const results = await new BonfiresCxnProvider(cfg, artifacts, depsWithFetch(fetchImpl)).search(
+      "xyzzy", { containerTag: "t" }
+    )
+    const context = results.filter(isContext)[0]!
+    expect(context.recipe.directiveVersion).toBeUndefined()
   })
 
   test("all-empty comprehension -> fallback:true, no affordances, directive null, order matches control", async () => {

@@ -32,6 +32,7 @@ import {
 } from "./retrieval2"
 import {
   answerDirective,
+  directivePreamble,
   combineSparse,
   isFallback,
   seededTermWeights,
@@ -355,7 +356,8 @@ export class BonfiresCxnProvider implements Provider {
     const lines = hydrationLines(finalHashes.slice(0, cfg.hydrateTop), artifacts.statements, artifacts.turns, cfg.hydrateWindow)
 
     // ---- answer directive ----
-    const directive = cfg.q && cfg.qAnswer ? answerDirective(comprehension?.wh_slot ?? null) : null
+    const slotDirective = cfg.q && cfg.qAnswer ? answerDirective(comprehension?.wh_slot ?? null) : null
+    const directive = slotDirective ? `${directivePreamble()}\n${slotDirective}` : null
     if (directive) affordancesFired.push("q:answer")
 
     const querySha = new Bun.CryptoHasher("sha256").update(JSON.stringify(queryVector)).digest("hex").slice(0, 16)
@@ -405,6 +407,7 @@ export class BonfiresCxnProvider implements Provider {
           qSeedEntityW: cfg.qSeedEntityW,
           qSeedVerbW: cfg.qSeedVerbW,
           qSeedLaneW: cfg.qSeedLaneW,
+          directiveVersion: 2,
           affordancesFired,
           fallback: comprehension ? isFallback(comprehension) : false,
           comprehend: comprehension
