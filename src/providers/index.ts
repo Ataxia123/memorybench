@@ -7,6 +7,7 @@ import { FilesystemProvider } from "./filesystem"
 import { RAGProvider } from "./rag"
 import { BonfiresProvider } from "./bonfires/index.js"
 import { BonfiresCxnProvider } from "./bonfires-cxn/index.js"
+import { BonfiresKernelProvider } from "./bonfires-kernel/index.js"
 
 const providers: Record<ProviderName, new () => Provider> = {
   supermemory: SupermemoryProvider,
@@ -16,6 +17,7 @@ const providers: Record<ProviderName, new () => Provider> = {
   rag: RAGProvider,
   bonfires: BonfiresProvider,
   "bonfires-cxn": BonfiresCxnProvider,
+  "bonfires-kernel": BonfiresKernelProvider,
 }
 
 export function createProvider(name: ProviderName): Provider {
@@ -51,4 +53,5 @@ export {
   RAGProvider,
   BonfiresProvider,
   BonfiresCxnProvider,
+  BonfiresKernelProvider,
 }
