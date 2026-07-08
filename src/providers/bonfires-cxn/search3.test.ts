@@ -450,7 +450,7 @@ describe("search v3 — answer channel + fallback", () => {
     expect(context.recipe.directiveVersion).toBe(2)
   })
 
-  test("q:false control parity: directiveVersion undefined, deep-equals q:false baseline", async () => {
+  test("q:false: recipe carries no directiveVersion", async () => {
     const artifacts = fixtureParity()
     const { fetchImpl } = routingFetch({ vector: [1, 0] })
     const cfg = baseConfigV3({ q: false })
