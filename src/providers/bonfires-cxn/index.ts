@@ -155,8 +155,9 @@ export class BonfiresCxnProvider implements Provider {
   // Sidecar drift tripwire: every non-residual.v1 construct id that actually
   // appears in the fold artifacts must be known to the live comprehend
   // sidecar's grammar (health.construct_ids), or comprehension results would
-  // silently never strata-match against them.
-  private async comprehendPreflight(): Promise<void> {
+  // silently never strata-match against them. Public for the same reason
+  // preflight() is: testable with injected cfg/artifacts/deps, no driver.
+  async comprehendPreflight(): Promise<void> {
     const { cfg, artifacts, deps } = this.requireState2()
     if (!cfg.comprehendUrl) throw new Error("bonfires-cxn: CXN_Q=1 requires comprehendUrl")
     const fetchImpl = deps.fetchImpl ?? (globalThis.fetch as FetchLike)

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { BonfiresCxnProvider, type CxnDeps } from "./index"
 import type { CxnArtifacts } from "./artifacts"
-import type { CxnConfig } from "./config"
+import { loadCxnConfig, type CxnConfig } from "./config"
 import type { Comprehension } from "./affordance"
 import type { StatementEntry } from "./retrieval2"
 import type { FetchLike } from "./voyage"
@@ -101,6 +101,8 @@ function routingFetch(opts: {
   vector: number[]
   comprehension?: Comprehension
   comprehendStatus?: number
+  health?: { cards: number; digest: string; construct_ids: string[] }
+  healthStatus?: number
 }): {
   fetchImpl: FetchLike
   voyageCalls: () => number
@@ -123,6 +125,15 @@ function routingFetch(opts: {
         return new Response("sidecar boom", { status: opts.comprehendStatus })
       }
       return new Response(JSON.stringify(opts.comprehension ?? EMPTY_COMPREHENSION), { status: 200 })
+    }
+    if (url.endsWith("/health")) {
+      if (opts.healthStatus && opts.healthStatus !== 200) {
+        return new Response("sidecar down", { status: opts.healthStatus })
+      }
+      return new Response(
+        JSON.stringify(opts.health ?? { cards: 1, digest: "d0", construct_ids: [] }),
+        { status: 200 }
+      )
     }
     throw new Error(`routingFetch: unexpected url ${url}`)
   }) as FetchLike
@@ -450,5 +461,96 @@ describe("search v3 — sidecar error", () => {
     const cfg = baseConfigV3({ q: true, comprehendUrl: "http://sidecar.local" })
     const provider = new BonfiresCxnProvider(cfg, artifacts, depsWithFetch(fetchImpl))
     await expect(provider.search("xyzzy", { containerTag: "t" })).rejects.toThrow(/comprehend/i)
+  })
+})
+
+describe("search v3 — comprehend preflight (drift tripwire)", () => {
+  // Artifacts carrying two non-residual construct ids so the subset assertion
+  // has something real to check against health.construct_ids.
+  function fixturePreflight(): CxnArtifacts {
+    const statements = new Map<string, StatementEntry>([
+      ["h1", stmt({
+        hash: "h1", utterance: "Someone painted a mural", ts: "2023-05-08T13:00:00Z",
+        session: "s1", session_index: 0, construct_ids: ["person.paint.v1", "residual.v1"],
+      })],
+      ["h2", stmt({
+        hash: "h2", utterance: "Melanie asked about pets", ts: "2023-05-08T14:00:00Z",
+        session: "s2", session_index: 0, construct_ids: ["person.ask.v1"],
+      })],
+    ])
+    const vectors = new Map<string, number[]>([["h1", [1, 0]], ["h2", [0, 1]]])
+    return {
+      utteranceMap: new Map(), entrenchmentByConstruct: new Map(), planRecordCount: 0,
+      statements, turns: new Map(), vectors, aggregates: { cxn: new Map(), episode: new Map() },
+    }
+  }
+
+  const cfg = () => baseConfigV3({ q: true, comprehendUrl: "http://sidecar.local" })
+
+  test("passes when cards >= 1 and every non-residual artifact construct id is in health", async () => {
+    const { fetchImpl } = routingFetch({
+      vector: [1, 0],
+      health: { cards: 2, digest: "d1", construct_ids: ["person.paint.v1", "person.ask.v1", "person.eat.v1"] },
+    })
+    const provider = new BonfiresCxnProvider(cfg(), fixturePreflight(), depsWithFetch(fetchImpl))
+    await expect(provider.comprehendPreflight()).resolves.toBeUndefined()
+  })
+
+  test("throws when the sidecar reports zero cards", async () => {
+    const { fetchImpl } = routingFetch({
+      vector: [1, 0],
+      health: { cards: 0, digest: "d1", construct_ids: ["person.paint.v1", "person.ask.v1"] },
+    })
+    const provider = new BonfiresCxnProvider(cfg(), fixturePreflight(), depsWithFetch(fetchImpl))
+    await expect(provider.comprehendPreflight()).rejects.toThrow(/cards/)
+  })
+
+  test("throws NAMING a non-residual artifact construct id missing from health.construct_ids", async () => {
+    // person.ask.v1 present, person.paint.v1 missing — residual.v1 exempt.
+    const { fetchImpl } = routingFetch({
+      vector: [1, 0],
+      health: { cards: 2, digest: "d1", construct_ids: ["person.ask.v1"] },
+    })
+    const provider = new BonfiresCxnProvider(cfg(), fixturePreflight(), depsWithFetch(fetchImpl))
+    await expect(provider.comprehendPreflight()).rejects.toThrow(/person\.paint\.v1/)
+  })
+})
+
+describe("config v3 — CXN_Q / CXN_COMPREHEND_URL coupling", () => {
+  const FULL_ENV = {
+    CXN_NEO4J_URI: "bolt://localhost:7687",
+    CXN_NEO4J_USER: "neo4j",
+    CXN_NEO4J_PASSWORD: "pw",
+    CXN_GROUP_ID: "g",
+    CXN_ARTIFACTS_DIR: "/tmp/artifacts",
+    CXN_UTTERANCE_MAP: "/tmp/map.json",
+    CXN_VOYAGE_API_KEY: "voyage-key",
+    CXN_CORPUS: "/tmp/corpus.json",
+    CXN_SESSION_TURNS: "/tmp/turns.json",
+    CXN_EMBEDDINGS: "/tmp/embeddings.json",
+  }
+
+  test("CXN_Q=1 without CXN_COMPREHEND_URL throws naming the missing var", () => {
+    expect(() => loadCxnConfig({ ...FULL_ENV, CXN_Q: "1" })).toThrow(/CXN_COMPREHEND_URL/)
+  })
+
+  test("CXN_Q=1 with CXN_COMPREHEND_URL loads q:true + comprehendUrl and channel defaults", () => {
+    const cfg = loadCxnConfig({ ...FULL_ENV, CXN_Q: "1", CXN_COMPREHEND_URL: "http://sidecar.local" })
+    expect(cfg.q).toBe(true)
+    expect(cfg.comprehendUrl).toBe("http://sidecar.local")
+    expect(cfg.qStrata).toBe(true)
+    expect(cfg.qGates).toBe(true)
+    expect(cfg.qSeed).toBe(true)
+    expect(cfg.qAnswer).toBe(true)
+    expect(cfg.qDelta).toBe(0.3)
+    expect(cfg.qSeedEntityW).toBe(2.0)
+    expect(cfg.qSeedVerbW).toBe(1.0)
+    expect(cfg.qSeedLaneW).toBe(0.5)
+  })
+
+  test("CXN_Q unset defaults q:false and does not require the URL", () => {
+    const cfg = loadCxnConfig(FULL_ENV)
+    expect(cfg.q).toBe(false)
+    expect(cfg.comprehendUrl).toBeUndefined()
   })
 })
