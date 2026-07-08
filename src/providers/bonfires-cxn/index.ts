@@ -19,6 +19,7 @@ import {
   bm25ScoresWeighted,
   buildAnswerPromptV3,
   buildBm25,
+  CORPUS_YEAR,
   denseScores,
   hydrationLines,
   lanePBoost,
@@ -36,6 +37,7 @@ import {
   seededTermWeights,
   strataBoost,
   temporalWindowFromDates,
+  type AffordanceKey,
   type Comprehension,
 } from "./affordance"
 
@@ -242,10 +244,20 @@ export class BonfiresCxnProvider implements Provider {
     const key = new Bun.CryptoHasher("sha256").update(query).digest("hex")
     const cached = this.queryVectorMemo.get(key)
     if (cached) return cached
-    const { cfg, deps } = this.requireState2()
+    const { cfg, artifacts, deps } = this.requireState2()
     const fetchImpl = deps.fetchImpl ?? (globalThis.fetch as FetchLike)
     const [vector] = await embedTexts([query], "query", cfg.voyageApiKey, fetchImpl)
     if (!vector) throw new Error("bonfires-cxn: embedQuery got no vector back from voyage")
+    // Hard-fail a live query vector whose dimension doesn't match the corpus
+    // embeddings' own dim — a silent mismatch would rank everything via NaN
+    // cosine similarity instead of erroring. artifacts.dim is only absent for
+    // bare-literal test fixtures that bypass loadArtifacts(); the guard is a
+    // no-op for those, matching their existing (already-consistent) vectors.
+    if (artifacts.dim !== undefined && vector.length !== artifacts.dim) {
+      throw new Error(
+        `bonfires-cxn: embedQuery vector dimension mismatch — got length ${vector.length}, expected ${artifacts.dim}`
+      )
+    }
     this.queryVectorMemo.set(key, vector)
     return vector
   }
@@ -275,7 +287,7 @@ export class BonfiresCxnProvider implements Provider {
       this.embedQuery(query), // live, memoized, HARD fail
       cfg.q ? this.comprehendQuery(query) : Promise.resolve(null),
     ])
-    const affordancesFired: string[] = []
+    const affordancesFired: AffordanceKey[] = []
 
     // ---- seed channel (before blend) ----
     let sparse = bm25Scores(this.ensureBm25(), query)
@@ -315,7 +327,11 @@ export class BonfiresCxnProvider implements Provider {
 
     // ---- temporal: comprehension-derived window when q+qGates, else legacy regex ----
     if (cfg.q && cfg.qGates) {
-      const window = comprehension ? temporalWindowFromDates(comprehension.date_fillers, 2023) : null
+      // Deliberate spec deviation from §0.3(2): the gate fires only when
+      // date_fillers is nonempty. A bare wh_slot === "when" derives no window
+      // on its own (there's no date text to build one from) — the spec
+      // wording predates this comprehension shape.
+      const window = comprehension ? temporalWindowFromDates(comprehension.date_fillers, CORPUS_YEAR) : null
       if (window) {
         scores = applyTemporalBoost(scores, artifacts.statements, window, 0.15)
         affordancesFired.push("q:temporal")

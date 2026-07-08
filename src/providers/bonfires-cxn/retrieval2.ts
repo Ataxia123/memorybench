@@ -139,6 +139,12 @@ export function monthWindow(year: number, monthIndex: number): { fromTs: string;
   }
 }
 
+// LoCoMo conv-26 corpus year — the fallback year for month-only temporal
+// expressions with no explicit year, used by both the legacy regex gate
+// below and the comprehension-derived date gate (affordance.ts's
+// temporalWindowFromDates, called from index.ts).
+export const CORPUS_YEAR = 2023
+
 export function temporalWindow(question: string): { fromTs: string; toTs: string } | null {
   const lower = question.toLowerCase()
   const yearMatch = /\b(20\d{2})\b/.exec(lower)
@@ -149,7 +155,7 @@ export function temporalWindow(question: string): { fromTs: string; toTs: string
     return new RegExp(`\\b${month}\\b`).test(lower)
   })
   if (monthIndex < 0 && !yearMatch) return null
-  const year = yearMatch ? Number(yearMatch[1]) : 2023   // corpus year when only a month is named
+  const year = yearMatch ? Number(yearMatch[1]) : CORPUS_YEAR   // corpus year when only a month is named
   if (monthIndex >= 0) return monthWindow(year, monthIndex)
   return { fromTs: `${year}-01-01T00:00:00Z`, toTs: `${year}-12-31T23:59:59Z` }
 }

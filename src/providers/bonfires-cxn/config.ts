@@ -72,7 +72,10 @@ function optionalFloat(env: Record<string, string | undefined>, key: string, fal
 function optionalBool(env: Record<string, string | undefined>, key: string, fallback: boolean): boolean {
   const raw = env[key]?.trim()
   if (!raw) return fallback
-  return raw === "1" || raw.toLowerCase() === "true"
+  const lower = raw.toLowerCase()
+  if (lower === "1" || lower === "true") return true
+  if (lower === "0" || lower === "false") return false
+  throw new Error(`bonfires-cxn: ${key} must be one of "", "0", "1", "true", "false" (case-insensitive), got "${raw}"`)
 }
 
 export function loadCxnConfig(env: Record<string, string | undefined> = process.env): CxnConfig {

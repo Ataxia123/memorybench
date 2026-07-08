@@ -6,6 +6,16 @@
 // comprehend checks). NOT part of `bun test` — invoked explicitly.
 import { BonfiresCxnProvider } from "../src/providers/bonfires-cxn/index"
 
+// Restores a saved process.env value. When the saved value was undefined
+// (the var was unset before this check touched it), `delete` it rather than
+// assigning `undefined` — assigning stringifies to the literal "undefined",
+// which config.ts's optionalBool() would then reject as an unrecognized
+// value instead of treating the var as unset.
+function restoreEnv(key: string, previous: string | undefined): void {
+  if (previous === undefined) delete process.env[key]
+  else process.env[key] = previous
+}
+
 const QUESTIONS = [
   "When did Caroline adopt the puppy?",
   "How does Melanie feel about her family?",
@@ -31,7 +41,7 @@ async function runLaneState(laneP: string): Promise<boolean> {
     await provider.initialize({ apiKey: "none" })
   } catch (error) {
     console.error(`LIVE CHECK FAIL (CXN_LANE_P=${laneP} initialize/preflight): ${String(error)}`)
-    process.env.CXN_LANE_P = previous
+    restoreEnv("CXN_LANE_P", previous)
     return false
   }
 
@@ -47,7 +57,7 @@ async function runLaneState(laneP: string): Promise<boolean> {
     const count = (JSON.parse(first) as unknown[]).length
     console.log(`ok (CXN_LANE_P=${laneP}): "${question}" -> ${count} result items (identical across 2 runs)`)
   }
-  process.env.CXN_LANE_P = previous
+  restoreEnv("CXN_LANE_P", previous)
   return ok
 }
 
@@ -64,7 +74,7 @@ async function runQState(cxnQ: string): Promise<boolean> {
     await provider.initialize({ apiKey: "none" })
   } catch (error) {
     console.error(`LIVE CHECK FAIL (CXN_Q=${cxnQ} initialize/preflight): ${String(error)}`)
-    process.env.CXN_Q = previous
+    restoreEnv("CXN_Q", previous)
     return false
   }
 
@@ -80,7 +90,7 @@ async function runQState(cxnQ: string): Promise<boolean> {
     const count = (JSON.parse(first) as unknown[]).length
     console.log(`ok (CXN_Q=${cxnQ}): "${question}" -> ${count} result items (identical across 2 runs)`)
   }
-  process.env.CXN_Q = previous
+  restoreEnv("CXN_Q", previous)
   return ok
 }
 
@@ -157,7 +167,7 @@ async function checkFallbackQuestion(): Promise<boolean> {
     await floorProvider.initialize({ apiKey: "none" })
   } catch (error) {
     console.error(`LIVE CHECK FAIL (fallback question, CXN_Q=0 initialize): ${String(error)}`)
-    process.env.CXN_Q = previousQ
+    restoreEnv("CXN_Q", previousQ)
     return false
   }
   const floorResults = await floorProvider.search(FALLBACK_QUESTION, { containerTag: "live-check-fallback" })
@@ -169,11 +179,11 @@ async function checkFallbackQuestion(): Promise<boolean> {
     await qProvider.initialize({ apiKey: "none" })
   } catch (error) {
     console.error(`LIVE CHECK FAIL (fallback question, CXN_Q=1 initialize): ${String(error)}`)
-    process.env.CXN_Q = previousQ
+    restoreEnv("CXN_Q", previousQ)
     return false
   }
   const qResults = await qProvider.search(FALLBACK_QUESTION, { containerTag: "live-check-fallback" })
-  process.env.CXN_Q = previousQ
+  restoreEnv("CXN_Q", previousQ)
 
   const contextItem = qResults.find(
     (item): item is Record<string, unknown> =>

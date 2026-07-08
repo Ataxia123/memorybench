@@ -61,4 +61,15 @@ describe("loadCxnConfig", () => {
     expect(() => loadCxnConfig({ ...FULL_ENV, CXN_BLEND_DENSE: "abc" })).toThrow(/CXN_BLEND_DENSE/)
     expect(() => loadCxnConfig({ ...FULL_ENV, CXN_DELTA_CXN: "-0.1" })).toThrow(/CXN_DELTA_CXN/)
   })
+
+  test("rejects unrecognized bool values, naming the key", () => {
+    expect(() => loadCxnConfig({ ...FULL_ENV, CXN_Q: "yes" })).toThrow(/CXN_Q/)
+  })
+
+  test("accepts bool values case-insensitively after trim", () => {
+    expect(
+      loadCxnConfig({ ...FULL_ENV, CXN_Q: "TRUE", CXN_COMPREHEND_URL: "http://sidecar.local" }).q
+    ).toBe(true)
+    expect(loadCxnConfig({ ...FULL_ENV, CXN_Q: "0" }).q).toBe(false)
+  })
 })

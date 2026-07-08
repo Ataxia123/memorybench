@@ -40,6 +40,7 @@ import { readFile, readdir } from "node:fs/promises"
 import { join } from "node:path"
 import { createHash } from "node:crypto"
 import { extractTerms, STOPWORDS } from "./retrieval"
+import { AFFORDANCE_KEYS } from "./affordance"
 
 export type MissClass = "not_hydratable" | "not_retrieved" | "answered_wrong" | "unlinked"
 
@@ -95,13 +96,6 @@ export interface GapReport {
   // ("control") — see computeFlips.
   flips?: FlipsReport
 }
-
-// Affordance keys the comprehend sidecar can fire, per src/providers/
-// bonfires-cxn/index.ts's search() (`affordancesFired.push("q:...")`) — kept
-// as a literal tuple (not derived from recipe) so a run with zero v3
-// metadata still reports all four keys at rate 0 rather than an empty object.
-export const AFFORDANCE_KEYS = ["q:strata", "q:temporal", "q:seed", "q:answer"] as const
-export type AffordanceKey = (typeof AFFORDANCE_KEYS)[number]
 
 export interface AffordancesReport {
   fallbackRate: number

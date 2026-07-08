@@ -209,6 +209,23 @@ describe("search v3 — control parity (CXN_Q=0)", () => {
   })
 })
 
+describe("search v3 — embed dimension guard", () => {
+  test("embedQuery rejects a live vector whose dimension mismatches the artifacts' dim, naming both lengths", async () => {
+    // fixtureParity()'s statement vectors are length 2 ([1,0]/[0,1]); tagging
+    // the artifacts with dim: 2 (as loadArtifacts() would from the real
+    // embeddings file) lets this test drive a real mismatch without needing
+    // 1024-d (VOYAGE_DIM) fixtures — validation keys off the artifact's own
+    // dim, not the production constant.
+    const artifacts = { ...fixtureParity(), dim: 2 }
+    const { fetchImpl } = routingFetch({ vector: [1, 0, 0] }) // voyage returns a 3-d vector
+    const cfg = baseConfigV3({ q: false, comprehendUrl: undefined })
+    const provider = new BonfiresCxnProvider(cfg, artifacts, depsWithFetch(fetchImpl))
+    await expect(provider.search("xyzzy", { containerTag: "t" })).rejects.toThrow(
+      /embedQuery vector dimension mismatch.*got length 3, expected 2/
+    )
+  })
+})
+
 describe("search v3 — concurrent dispatch (CXN_Q=1)", () => {
   test("exactly one voyage call and one comprehend call per search(); POST body is {text}", async () => {
     const artifacts = fixtureParity()

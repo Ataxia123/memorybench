@@ -121,4 +121,57 @@ describe("loadArtifacts", () => {
     )
     await expect(loadArtifacts(cfg)).rejects.toThrow(/no embedding vector/)
   })
+
+  test("throws naming the hash and both lengths when a statement vector has the wrong dimension", async () => {
+    const cfg = fixtureConfig()
+    writeFileSync(
+      cfg.embeddingsPath!,
+      JSON.stringify({
+        model: VOYAGE_MODEL,
+        dim: 3,
+        statements: { abc123abc123abc1: [1, 0] },
+        aggregates: { cxn: { "person.ask.v1": [1, 0, 0] }, episode: { s1: [1, 0, 0] } },
+      })
+    )
+    await expect(loadArtifacts(cfg)).rejects.toThrow(
+      /statement abc123abc123abc1.*got length 2, expected 3/
+    )
+  })
+
+  test("throws naming the id and both lengths when a cxn aggregate vector has the wrong dimension", async () => {
+    const cfg = fixtureConfig()
+    writeFileSync(
+      cfg.embeddingsPath!,
+      JSON.stringify({
+        model: VOYAGE_MODEL,
+        dim: 3,
+        statements: { abc123abc123abc1: [1, 0, 0] },
+        aggregates: { cxn: { "person.ask.v1": [1, 0] }, episode: { s1: [1, 0, 0] } },
+      })
+    )
+    await expect(loadArtifacts(cfg)).rejects.toThrow(
+      /cxn aggregate person\.ask\.v1.*got length 2, expected 3/
+    )
+  })
+
+  test("throws naming the id and both lengths when an episode aggregate vector has the wrong dimension", async () => {
+    const cfg = fixtureConfig()
+    writeFileSync(
+      cfg.embeddingsPath!,
+      JSON.stringify({
+        model: VOYAGE_MODEL,
+        dim: 3,
+        statements: { abc123abc123abc1: [1, 0, 0] },
+        aggregates: { cxn: { "person.ask.v1": [1, 0, 0] }, episode: { s1: [1, 0] } },
+      })
+    )
+    await expect(loadArtifacts(cfg)).rejects.toThrow(
+      /episode aggregate s1.*got length 2, expected 3/
+    )
+  })
+
+  test("existing dim-3 fixture keeps loading unchanged and exposes dim", async () => {
+    const artifacts = await loadArtifacts(fixtureConfig())
+    expect(artifacts.dim).toBe(3)
+  })
 })

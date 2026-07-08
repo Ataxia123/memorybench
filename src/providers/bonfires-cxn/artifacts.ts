@@ -23,6 +23,14 @@ export interface CxnArtifacts {
   turns?: Map<string, Turn[]>
   vectors?: Map<string, number[]>
   aggregates?: Aggregates
+  // Embedding dimension, threaded from the embeddings artifact's own `dim`
+  // field. Optional (like the rest of the v2 block) so bare-literal test
+  // fixtures that never call loadArtifacts() keep compiling; loadArtifacts()
+  // always populates it and validates every statement/aggregate vector
+  // against it, and embedQuery() (index.ts) uses it to hard-fail a live
+  // query vector of the wrong dimension instead of silently ranking
+  // everything via NaN cosine similarity.
+  dim?: number
 }
 
 export async function loadArtifacts(cfg: CxnConfig): Promise<CxnArtifacts> {
@@ -78,5 +86,32 @@ export async function loadArtifacts(cfg: CxnConfig): Promise<CxnArtifacts> {
     episode: new Map(Object.entries(embeddingsRaw.aggregates.episode)),
   }
 
-  return { utteranceMap, entrenchmentByConstruct, planRecordCount, statements, turns, vectors, aggregates }
+  // Dimension guard: every statement/aggregate vector must match the
+  // artifact's own declared `dim`, or cosine similarity downstream silently
+  // ranks everything via NaN (mismatched-length dot products) instead of
+  // failing loudly.
+  const dim = embeddingsRaw.dim
+  for (const [hash, vector] of vectors) {
+    if (vector.length !== dim) {
+      throw new Error(
+        `bonfires-cxn: embedding dimension mismatch for statement ${hash} — got length ${vector.length}, expected ${dim}`
+      )
+    }
+  }
+  for (const [id, vector] of aggregates.cxn) {
+    if (vector.length !== dim) {
+      throw new Error(
+        `bonfires-cxn: embedding dimension mismatch for cxn aggregate ${id} — got length ${vector.length}, expected ${dim}`
+      )
+    }
+  }
+  for (const [id, vector] of aggregates.episode) {
+    if (vector.length !== dim) {
+      throw new Error(
+        `bonfires-cxn: embedding dimension mismatch for episode aggregate ${id} — got length ${vector.length}, expected ${dim}`
+      )
+    }
+  }
+
+  return { utteranceMap, entrenchmentByConstruct, planRecordCount, statements, turns, vectors, aggregates, dim }
 }
