@@ -41,6 +41,16 @@ export interface CxnConfig {
   qSeedEntityW?: number
   qSeedVerbW?: number
   qSeedLaneW?: number
+  // v4 (leg 5: MMR diversification gate + caption artifact as a first-class
+  // retrievable lane). Optional at the type level for the same reason as the
+  // v2/v3 blocks above: pre-existing fixtures that build a bare CxnConfig
+  // literal keep compiling unchanged; loadCxnConfig() always populates them
+  // and throws if the cross-field requirements below aren't met.
+  mmr?: boolean
+  mmrLambda?: number
+  captions?: boolean
+  captionsPath?: string
+  captionDamp?: number
 }
 
 function required(env: Record<string, string | undefined>, key: string): string {
@@ -113,9 +123,20 @@ export function loadCxnConfig(env: Record<string, string | undefined> = process.
     qSeedEntityW: optionalFloat(env, "CXN_QSEED_ENTITY_W", 2.0),
     qSeedVerbW: optionalFloat(env, "CXN_QSEED_VERB_W", 1.0),
     qSeedLaneW: optionalFloat(env, "CXN_QSEED_LANE_W", 0.5),
+    mmr: optionalBool(env, "CXN_MMR", false),
+    mmrLambda: optionalFloat(env, "CXN_MMR_LAMBDA", 0.3),
+    captions: optionalBool(env, "CXN_CAPTIONS", false),
+    captionsPath: env.CXN_CAPTIONS_PATH?.trim() || undefined,
+    captionDamp: optionalFloat(env, "CXN_CAPTION_DAMP", 1.0),
   }
   if (config.q && !config.comprehendUrl) {
     throw new Error("bonfires-cxn: CXN_Q=1 requires CXN_COMPREHEND_URL")
+  }
+  if (config.captions && !config.captionsPath) {
+    throw new Error("bonfires-cxn: CXN_CAPTIONS=1 requires CXN_CAPTIONS_PATH")
+  }
+  if (config.mmr && !config.q) {
+    throw new Error("bonfires-cxn: CXN_MMR=1 requires CXN_Q=1 (CXN_MMR needs CXN_Q)")
   }
   return config
 }

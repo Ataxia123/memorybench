@@ -11,6 +11,13 @@ export interface UtteranceEntry {
   session: string
 }
 
+export interface CaptionEntry {
+  caption: string
+  ts: string
+  actor_id: string
+  session: string
+}
+
 export interface CxnArtifacts {
   utteranceMap: Map<string, UtteranceEntry>
   entrenchmentByConstruct: Map<string, number>
@@ -31,6 +38,15 @@ export interface CxnArtifacts {
   // query vector of the wrong dimension instead of silently ranking
   // everything via NaN cosine similarity.
   dim?: number
+  // v4 (leg 5: caption artifact — blip captions as first-class retrievable
+  // items). Optional for the same reason as the v2 block: bare-literal test
+  // fixtures that never call loadArtifacts() keep compiling; loadArtifacts()
+  // populates both only when cfg.captions is on, validating the caption
+  // artifact's model/dim against the main embeddings artifact and every
+  // vector's length against dim, so a drifted caption artifact fails loudly
+  // instead of silently ranking via NaN cosine similarity.
+  captions?: Map<string, CaptionEntry>
+  captionVectors?: Map<string, number[]>
 }
 
 export async function loadArtifacts(cfg: CxnConfig): Promise<CxnArtifacts> {
@@ -113,5 +129,35 @@ export async function loadArtifacts(cfg: CxnConfig): Promise<CxnArtifacts> {
     }
   }
 
-  return { utteranceMap, entrenchmentByConstruct, planRecordCount, statements, turns, vectors, aggregates, dim }
+  let captions: Map<string, CaptionEntry> | undefined
+  let captionVectors: Map<string, number[]> | undefined
+  if (cfg.captions && cfg.captionsPath) {
+    const captionsRaw = JSON.parse(await readFile(cfg.captionsPath, "utf-8")) as {
+      model: string
+      dim: number
+      items: Record<string, CaptionEntry & { vector: number[] }>
+    }
+    if (captionsRaw.model !== embeddingsRaw.model) {
+      throw new Error(
+        `bonfires-cxn: caption artifact model ${captionsRaw.model} != embeddings model ${embeddingsRaw.model}`
+      )
+    }
+    if (captionsRaw.dim !== dim) {
+      throw new Error(`bonfires-cxn: caption artifact dim ${captionsRaw.dim} != embeddings dim ${dim}`)
+    }
+    captions = new Map()
+    captionVectors = new Map()
+    for (const id of Object.keys(captionsRaw.items).sort()) {
+      const { vector, ...entry } = captionsRaw.items[id]!
+      if (vector.length !== dim) {
+        throw new Error(
+          `bonfires-cxn: embedding dimension mismatch for caption ${id} — got length ${vector.length}, expected ${dim}`
+        )
+      }
+      captions.set(id, entry)
+      captionVectors.set(id, vector)
+    }
+  }
+
+  return { utteranceMap, entrenchmentByConstruct, planRecordCount, statements, turns, vectors, aggregates, dim, captions, captionVectors }
 }
