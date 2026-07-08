@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises"
 import type {
   IndexingProgressCallback,
   IngestOptions,
@@ -87,17 +88,40 @@ interface KernelIndexResponseWire {
 
 function sessionToMessageBatch(session: UnifiedSession): Array<Record<string, unknown>> {
   const referenceTime = session.metadata?.date as string | undefined
-  const base = referenceTime ? Date.parse(referenceTime) : Date.now()
-  return session.messages.map((m, i) => ({
+  const base = referenceTime ? Date.parse(referenceTime) : undefined
+  return session.messages.map((m, i) => {
     // The kernel-native fold (memory_kernel.fold.product._build_statement_corpus_and_turns)
     // indexes message dicts directly by `["text"]`/`["username"]`/["timestamp"]`
     // (no `.get()` fallback) — this shape is NOT the `{content, speaker}`
     // remapping the legacy `/search/memory-kernel/index` client path uses.
-    text: m.content,
-    username: m.speaker ?? m.role,
-    timestamp: m.timestamp ?? new Date(base + i * 120_000).toISOString(),
-    metadata: { ...(m.metadata ?? {}), session_id: session.sessionId },
-  }))
+    //
+    // Timestamps must be derived, never invented: a `Date.now()` fallback
+    // here is nondeterministic — it bakes the wall-clock moment the bench
+    // happened to run into statement content, which breaks the pinned
+    // content-keyed extraction cache (a different timestamp -> a different
+    // cache key -> silent live re-extraction) and makes two runs of the same
+    // corpus non-reproducible. If a message has no timestamp of its own AND
+    // the session carries no `metadata.date` to derive one from, that is a
+    // data-completeness bug upstream (in extraction/sampling) that must be
+    // fixed there, not papered over here.
+    let timestamp = m.timestamp
+    if (!timestamp) {
+      if (base === undefined) {
+        throw new Error(
+          `bonfires-kernel: sessionToMessageBatch: message ${i} in session ` +
+            `${session.sessionId} has no timestamp and session.metadata.date is ` +
+            `unset — refusing to invent a wall-clock timestamp`
+        )
+      }
+      timestamp = new Date(base + i * 120_000).toISOString()
+    }
+    return {
+      text: m.content,
+      username: m.speaker ?? m.role,
+      timestamp,
+      metadata: { ...(m.metadata ?? {}), session_id: session.sessionId },
+    }
+  })
 }
 
 export class BonfiresKernelProvider implements Provider {
@@ -186,7 +210,15 @@ export class BonfiresKernelProvider implements Provider {
 
   private async foldIndex(): Promise<void> {
     const cfg = this.requireConfig()
-    const messageBatches = [...this.sessionsById.values()].map(sessionToMessageBatch)
+    // Pinned-batches mode (KERNELB_BATCHES_PATH): read the reference batch
+    // JSON verbatim rather than reassembling from sessionsById. See the
+    // `batchesPath` doc comment on KernelConfig for why byte-faithfulness
+    // matters here — the parity corpus's cache key is content-derived, so
+    // any reassembly drift (however small) silently falls through to live
+    // re-extraction instead of hitting the pinned cache.
+    const messageBatches = cfg.batchesPath
+      ? await this.loadPinnedBatches(cfg.batchesPath)
+      : [...this.sessionsById.values()].map(sessionToMessageBatch)
     const response = await this.fetchImpl(`${cfg.apiUrl}/bonfires/${cfg.bonfireId}/kernel/index`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Internal-Token": cfg.apiKey, "X-Permission": "write" },
@@ -205,6 +237,24 @@ export class BonfiresKernelProvider implements Provider {
       `bonfires-kernel: cxn fold indexed ${this.indexDiagnostics.statement_count ?? "?"} statements ` +
         `across ${messageBatches.length} sessions (census_digest=${this.indexDiagnostics.census_digest ?? "?"})`
     )
+    // Census-digest tripwire (KERNELB_EXPECTED_CENSUS_DIGEST): a loud failure
+    // against silent extraction drift. If the fold's cache-key lookup missed
+    // (e.g. because message_batches weren't byte-faithful to the pinned
+    // reference), the kernel re-extracts live and produces a different
+    // census_digest — better to blow up here than ship a mixed-fold
+    // artifact dir that only fails later, per-query, with a KeyError.
+    if (cfg.expectedCensusDigest && this.indexDiagnostics.census_digest !== cfg.expectedCensusDigest) {
+      throw new Error(
+        `bonfires-kernel: census_digest mismatch — expected ${cfg.expectedCensusDigest}, ` +
+          `got ${this.indexDiagnostics.census_digest ?? "(none)"} (fold likely re-extracted ` +
+          `instead of hitting the pinned cache)`
+      )
+    }
+  }
+
+  private async loadPinnedBatches(path: string): Promise<Array<Array<Record<string, unknown>>>> {
+    const raw = await readFile(path, "utf8")
+    return JSON.parse(raw) as Array<Array<Record<string, unknown>>>
   }
 
   async search(query: string, _options: SearchOptions): Promise<unknown[]> {

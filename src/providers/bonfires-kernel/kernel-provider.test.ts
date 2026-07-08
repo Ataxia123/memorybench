@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test"
+import { mkdtempSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { BonfiresKernelProvider, mapSearchEnvelope, type FetchLike } from "./index"
 import { loadKernelConfig, type KernelConfig } from "./config"
 import type { UnifiedSession } from "../../types/unified"
@@ -83,6 +86,23 @@ describe("loadKernelConfig", () => {
     )
     expect(cfg.actorId).toBe("custom")
     expect(cfg.expectedCardsDigest).toBe("abc123")
+  })
+
+  test("leaves batchesPath and expectedCensusDigest unset by default", () => {
+    const cfg = loadKernelConfig(baseEnv())
+    expect(cfg.batchesPath).toBeUndefined()
+    expect(cfg.expectedCensusDigest).toBeUndefined()
+  })
+
+  test("picks up KERNELB_BATCHES_PATH and KERNELB_EXPECTED_CENSUS_DIGEST overrides", () => {
+    const cfg = loadKernelConfig(
+      baseEnv({
+        KERNELB_BATCHES_PATH: "/tmp/conv26_batches.json",
+        KERNELB_EXPECTED_CENSUS_DIGEST: "digest123",
+      })
+    )
+    expect(cfg.batchesPath).toBe("/tmp/conv26_batches.json")
+    expect(cfg.expectedCensusDigest).toBe("digest123")
   })
 })
 
@@ -191,6 +211,106 @@ describe("ingest + awaitIndexing (cxn fold)", () => {
     // must NOT re-POST.
     await provider.awaitIndexing(result, "q2")
     expect(calls.length).toBe(1)
+  })
+
+  test("missing timestamp with no session metadata.date throws instead of inventing wall-clock time", async () => {
+    const fetchImpl: FetchLike = async () => {
+      throw new Error("must not fetch when sessionToMessageBatch throws first")
+    }
+    const provider = new BonfiresKernelProvider(config(), fetchImpl)
+    const s1: UnifiedSession = {
+      sessionId: "s1",
+      messages: [{ role: "user", content: "hi there", speaker: "Melanie" }],
+      // no metadata.date
+    }
+    const result = await provider.ingest([s1], { containerTag: "q1" })
+    await expect(provider.awaitIndexing(result, "q1")).rejects.toThrow(
+      /no timestamp and session\.metadata\.date is unset/
+    )
+  })
+})
+
+describe("pinned-batches mode (KERNELB_BATCHES_PATH)", () => {
+  test("foldIndex reads the batches file and POSTs its content verbatim, bypassing sessionToMessageBatch", async () => {
+    const pinnedBatches = [
+      [
+        {
+          text: "Hey Mel! Good to see you!",
+          username: "Caroline",
+          timestamp: "2023-05-08T13:56:00+00:00",
+          metadata: { sample_id: "conv-26", sessionId: "conv-26-session_1", dia_id: "D1:1" },
+        },
+      ],
+    ]
+    const dir = mkdtempSync(join(tmpdir(), "kernel-batches-"))
+    const batchesPath = join(dir, "batches.json")
+    writeFileSync(batchesPath, JSON.stringify(pinnedBatches))
+
+    const calls: Array<{ body: unknown }> = []
+    const fetchImpl: FetchLike = async (_url, init) => {
+      calls.push({ body: init?.body ? JSON.parse(init.body as string) : undefined })
+      return new Response(
+        JSON.stringify({ census_digest: "d1", statement_count: 1, construct_universe: [] }),
+        { status: 200 }
+      )
+    }
+    const provider = new BonfiresKernelProvider(config({ batchesPath }), fetchImpl)
+
+    // A session whose message has no timestamp AND no metadata.date — this
+    // would THROW if sessionToMessageBatch ran on it, proving pinned-batches
+    // mode bypasses reassembly entirely rather than merely overriding it.
+    const s1: UnifiedSession = {
+      sessionId: "s1",
+      messages: [{ role: "user", content: "hi there", speaker: "Melanie" }],
+    }
+    const result = await provider.ingest([s1], { containerTag: "q1" })
+    await provider.awaitIndexing(result, "q1")
+
+    expect(calls.length).toBe(1)
+    const body = calls[0]?.body as { message_batches: unknown }
+    expect(body.message_batches).toEqual(pinnedBatches)
+  })
+})
+
+describe("census-digest tripwire (KERNELB_EXPECTED_CENSUS_DIGEST)", () => {
+  function session(id: string, messages: UnifiedSession["messages"]): UnifiedSession {
+    return { sessionId: id, messages, metadata: { date: "2023-05-08" } }
+  }
+
+  test("passes when the fold response census_digest matches", async () => {
+    const fetchImpl: FetchLike = async () =>
+      new Response(
+        JSON.stringify({ census_digest: "expected-digest", statement_count: 1, construct_universe: [] }),
+        { status: 200 }
+      )
+    const provider = new BonfiresKernelProvider(
+      config({ expectedCensusDigest: "expected-digest" }),
+      fetchImpl
+    )
+    const s1 = session("s1", [
+      { role: "user", content: "hi there", speaker: "Melanie", timestamp: "2023-05-08T10:00:00Z" },
+    ])
+    const result = await provider.ingest([s1], { containerTag: "q1" })
+    await expect(provider.awaitIndexing(result, "q1")).resolves.toBeUndefined()
+  })
+
+  test("throws with both digests named when the fold response census_digest mismatches", async () => {
+    const fetchImpl: FetchLike = async () =>
+      new Response(
+        JSON.stringify({ census_digest: "drifted-digest", statement_count: 1, construct_universe: [] }),
+        { status: 200 }
+      )
+    const provider = new BonfiresKernelProvider(
+      config({ expectedCensusDigest: "expected-digest" }),
+      fetchImpl
+    )
+    const s1 = session("s1", [
+      { role: "user", content: "hi there", speaker: "Melanie", timestamp: "2023-05-08T10:00:00Z" },
+    ])
+    const result = await provider.ingest([s1], { containerTag: "q1" })
+    await expect(provider.awaitIndexing(result, "q1")).rejects.toThrow(
+      /census_digest mismatch — expected expected-digest, got drifted-digest/
+    )
   })
 })
 
