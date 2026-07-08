@@ -132,9 +132,13 @@ describe("preflight (KERNELB_EXPECTED_CARDS_DIGEST)", () => {
 
 describe("ingest + awaitIndexing (cxn fold)", () => {
   test("POSTs message_batches once with metadata.cxn_fold=true, in text/username/timestamp shape", async () => {
-    const calls: Array<{ url: string; body: unknown }> = []
+    const calls: Array<{ url: string; headers: Record<string, string>; body: unknown }> = []
     const fetchImpl: FetchLike = async (url, init) => {
-      calls.push({ url, body: init?.body ? JSON.parse(init.body as string) : undefined })
+      calls.push({
+        url,
+        headers: (init?.headers as Record<string, string>) || {},
+        body: init?.body ? JSON.parse(init.body as string) : undefined,
+      })
       return new Response(
         JSON.stringify({ census_digest: "d1", statement_count: 2, construct_universe: [] }),
         { status: 200 }
@@ -154,6 +158,7 @@ describe("ingest + awaitIndexing (cxn fold)", () => {
     })
     expect(calls.length).toBe(1)
     expect(calls[0]?.url).toContain("/bonfires/bf1/kernel/index")
+    expect(calls[0]?.headers["X-Permission"]).toBe("write")
     const body = calls[0]?.body as {
       actor_id: string
       mode: string

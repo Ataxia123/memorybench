@@ -189,7 +189,7 @@ export class BonfiresKernelProvider implements Provider {
     const messageBatches = [...this.sessionsById.values()].map(sessionToMessageBatch)
     const response = await this.fetchImpl(`${cfg.apiUrl}/bonfires/${cfg.bonfireId}/kernel/index`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "X-Internal-Token": cfg.apiKey },
+      headers: { "Content-Type": "application/json", "X-Internal-Token": cfg.apiKey, "X-Permission": "write" },
       body: JSON.stringify({
         actor_id: cfg.actorId,
         mode: "upsert",
