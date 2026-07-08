@@ -158,20 +158,25 @@ async function runMmrState(cxnMmr: string): Promise<boolean> {
   return ok
 }
 
-// v4 (leg 5): same shape as runMmrState, toggling CXN_CAPTIONS — unlike
-// CXN_MMR, CXN_CAPTIONS does not require CXN_Q, so this only touches
-// CXN_CAPTIONS itself (CXN_CAPTIONS_PATH must already be set in the
+// v4 (leg 5): same shape as runMmrState, toggling CXN_CAPTIONS — like
+// CXN_MMR, CXN_CAPTIONS requires CXN_Q=1 (loadCxnConfig() throws otherwise:
+// caption lane attribution lives in the q recipe), so this pins CXN_Q="1" for
+// its own duration exactly the way runMmrState does and restores both env
+// vars on the way out (CXN_CAPTIONS_PATH must already be set in the
 // environment by the controller for the "1" state — loadCxnConfig() throws
 // otherwise).
 async function runCaptionsState(cxnCaptions: string): Promise<boolean> {
   const previousCaptions = process.env.CXN_CAPTIONS
+  const previousQ = process.env.CXN_Q
   process.env.CXN_CAPTIONS = cxnCaptions
+  process.env.CXN_Q = "1"
   const provider = new BonfiresCxnProvider()
   try {
     await provider.initialize({ apiKey: "none" })
   } catch (error) {
     console.error(`LIVE CHECK FAIL (CXN_CAPTIONS=${cxnCaptions} initialize/preflight): ${String(error)}`)
     restoreEnv("CXN_CAPTIONS", previousCaptions)
+    restoreEnv("CXN_Q", previousQ)
     return false
   }
 
@@ -210,6 +215,7 @@ async function runCaptionsState(cxnCaptions: string): Promise<boolean> {
   }
 
   restoreEnv("CXN_CAPTIONS", previousCaptions)
+  restoreEnv("CXN_Q", previousQ)
   return ok
 }
 
