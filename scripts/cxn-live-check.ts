@@ -94,6 +94,207 @@ async function runQState(cxnQ: string): Promise<boolean> {
   return ok
 }
 
+// v4 (leg 5): the same 5-question x 2-run byte-identity gate as
+// runLaneState/runQState, toggling CXN_MMR — an orthogonal axis. CXN_MMR=1
+// requires CXN_Q=1 (config.ts's cross-field check), so this pins CXN_Q=1 for
+// its own duration regardless of whatever the ambient CXN_Q currently is, and
+// restores both env vars on the way out. The off-state (CXN_MMR=0) run is
+// ALSO compared, question-by-question, against a second provider built with
+// CXN_MMR unset entirely (not just "0") — cfg.mmr resolves identically via
+// requireState2()'s `??` defaulting either way, so byte-identity there is the
+// literal "off byte-matches the pre-leg-5 behavior" proof, not merely
+// determinism-with-itself.
+async function runMmrState(cxnMmr: string): Promise<boolean> {
+  const previousMmr = process.env.CXN_MMR
+  const previousQ = process.env.CXN_Q
+  process.env.CXN_MMR = cxnMmr
+  process.env.CXN_Q = "1"
+  const provider = new BonfiresCxnProvider()
+  try {
+    await provider.initialize({ apiKey: "none" })
+  } catch (error) {
+    console.error(`LIVE CHECK FAIL (CXN_MMR=${cxnMmr} initialize/preflight): ${String(error)}`)
+    restoreEnv("CXN_MMR", previousMmr)
+    restoreEnv("CXN_Q", previousQ)
+    return false
+  }
+
+  let ok = true
+  for (const question of QUESTIONS) {
+    const first = JSON.stringify(await provider.search(question, { containerTag: "live-check-mmr" }))
+    const second = JSON.stringify(await provider.search(question, { containerTag: "live-check-mmr" }))
+    if (first !== second) {
+      console.error(`LIVE CHECK FAIL (CXN_MMR=${cxnMmr} determinism): "${question}"`)
+      ok = false
+      continue
+    }
+    const count = (JSON.parse(first) as unknown[]).length
+    console.log(`ok (CXN_MMR=${cxnMmr}): "${question}" -> ${count} result items (identical across 2 runs)`)
+  }
+
+  if (cxnMmr === "0") {
+    delete process.env.CXN_MMR
+    const bareProvider = new BonfiresCxnProvider()
+    try {
+      await bareProvider.initialize({ apiKey: "none" })
+      for (const question of QUESTIONS) {
+        const off = JSON.stringify(await provider.search(question, { containerTag: "live-check-mmr" }))
+        const bare = JSON.stringify(await bareProvider.search(question, { containerTag: "live-check-mmr" }))
+        if (off !== bare) {
+          console.error(`LIVE CHECK FAIL (CXN_MMR=0 vs unset parity): "${question}"`)
+          ok = false
+        } else {
+          console.log(`ok (CXN_MMR=0 vs unset parity): "${question}" -> byte-identical`)
+        }
+      }
+    } catch (error) {
+      console.error(`LIVE CHECK FAIL (CXN_MMR unset baseline initialize): ${String(error)}`)
+      ok = false
+    }
+  }
+
+  restoreEnv("CXN_MMR", previousMmr)
+  restoreEnv("CXN_Q", previousQ)
+  return ok
+}
+
+// v4 (leg 5): same shape as runMmrState, toggling CXN_CAPTIONS — unlike
+// CXN_MMR, CXN_CAPTIONS does not require CXN_Q, so this only touches
+// CXN_CAPTIONS itself (CXN_CAPTIONS_PATH must already be set in the
+// environment by the controller for the "1" state — loadCxnConfig() throws
+// otherwise).
+async function runCaptionsState(cxnCaptions: string): Promise<boolean> {
+  const previousCaptions = process.env.CXN_CAPTIONS
+  process.env.CXN_CAPTIONS = cxnCaptions
+  const provider = new BonfiresCxnProvider()
+  try {
+    await provider.initialize({ apiKey: "none" })
+  } catch (error) {
+    console.error(`LIVE CHECK FAIL (CXN_CAPTIONS=${cxnCaptions} initialize/preflight): ${String(error)}`)
+    restoreEnv("CXN_CAPTIONS", previousCaptions)
+    return false
+  }
+
+  let ok = true
+  for (const question of QUESTIONS) {
+    const first = JSON.stringify(await provider.search(question, { containerTag: "live-check-captions" }))
+    const second = JSON.stringify(await provider.search(question, { containerTag: "live-check-captions" }))
+    if (first !== second) {
+      console.error(`LIVE CHECK FAIL (CXN_CAPTIONS=${cxnCaptions} determinism): "${question}"`)
+      ok = false
+      continue
+    }
+    const count = (JSON.parse(first) as unknown[]).length
+    console.log(`ok (CXN_CAPTIONS=${cxnCaptions}): "${question}" -> ${count} result items (identical across 2 runs)`)
+  }
+
+  if (cxnCaptions === "0") {
+    delete process.env.CXN_CAPTIONS
+    const bareProvider = new BonfiresCxnProvider()
+    try {
+      await bareProvider.initialize({ apiKey: "none" })
+      for (const question of QUESTIONS) {
+        const off = JSON.stringify(await provider.search(question, { containerTag: "live-check-captions" }))
+        const bare = JSON.stringify(await bareProvider.search(question, { containerTag: "live-check-captions" }))
+        if (off !== bare) {
+          console.error(`LIVE CHECK FAIL (CXN_CAPTIONS=0 vs unset parity): "${question}"`)
+          ok = false
+        } else {
+          console.log(`ok (CXN_CAPTIONS=0 vs unset parity): "${question}" -> byte-identical`)
+        }
+      }
+    } catch (error) {
+      console.error(`LIVE CHECK FAIL (CXN_CAPTIONS unset baseline initialize): ${String(error)}`)
+      ok = false
+    }
+  }
+
+  restoreEnv("CXN_CAPTIONS", previousCaptions)
+  return ok
+}
+
+// v4 (leg 5): a pinned list-shape question, run with CXN_MMR=1, CXN_Q=1, AND
+// CXN_CAPTIONS=1 together (the full leg-5 integration, so a caption item is
+// eligible to land in the final selection alongside statements) — asserts
+// recipe.mmr.pool is sorted, "b:mmr" actually fired, and every final id
+// (utterance OR caption) is a member of that pool.
+const MMR_LIST_QUESTION = "What books has Melanie read?"
+
+async function checkMmrListQuestion(): Promise<boolean> {
+  const previousMmr = process.env.CXN_MMR
+  const previousQ = process.env.CXN_Q
+  const previousCaptions = process.env.CXN_CAPTIONS
+  process.env.CXN_MMR = "1"
+  process.env.CXN_Q = "1"
+  process.env.CXN_CAPTIONS = "1"
+
+  const provider = new BonfiresCxnProvider()
+  try {
+    await provider.initialize({ apiKey: "none" })
+  } catch (error) {
+    console.error(`LIVE CHECK FAIL (MMR list question initialize): ${String(error)}`)
+    restoreEnv("CXN_MMR", previousMmr)
+    restoreEnv("CXN_Q", previousQ)
+    restoreEnv("CXN_CAPTIONS", previousCaptions)
+    return false
+  }
+
+  const results = await provider.search(MMR_LIST_QUESTION, { containerTag: "live-check-mmr-list" })
+  restoreEnv("CXN_MMR", previousMmr)
+  restoreEnv("CXN_Q", previousQ)
+  restoreEnv("CXN_CAPTIONS", previousCaptions)
+
+  const contextItem = results.find(
+    (item): item is Record<string, unknown> =>
+      !!item && typeof item === "object" && (item as Record<string, unknown>).kind === "cxn_context"
+  )
+  const recipe = contextItem?.recipe as Record<string, unknown> | undefined
+  const affordancesFired = Array.isArray(recipe?.affordancesFired) ? (recipe.affordancesFired as unknown[]) : []
+  if (!affordancesFired.includes("b:mmr")) {
+    console.error(`LIVE CHECK FAIL (MMR list question): "b:mmr" not in affordancesFired for "${MMR_LIST_QUESTION}"`)
+    return false
+  }
+
+  const mmr = recipe?.mmr as { pool?: unknown } | undefined
+  const pool = mmr?.pool
+  if (!Array.isArray(pool) || !pool.every((id) => typeof id === "string")) {
+    console.error(
+      `LIVE CHECK FAIL (MMR list question): recipe.mmr.pool missing or not a string array for "${MMR_LIST_QUESTION}"`
+    )
+    return false
+  }
+  const sortedPool = [...(pool as string[])].sort()
+  if (JSON.stringify(pool) !== JSON.stringify(sortedPool)) {
+    console.error(`LIVE CHECK FAIL (MMR list question): recipe.mmr.pool is not sorted for "${MMR_LIST_QUESTION}"`)
+    return false
+  }
+
+  const poolSet = new Set(pool as string[])
+  const finalIds = results
+    .map((item) => {
+      if (!item || typeof item !== "object") return null
+      const record = item as Record<string, unknown>
+      if (record.kind !== "cxn_utterance") return null
+      const metadata = record.metadata as Record<string, unknown> | undefined
+      const id = metadata?.utterance_hash ?? metadata?.caption_id
+      return typeof id === "string" ? id : null
+    })
+    .filter((id): id is string => id !== null)
+
+  const missing = finalIds.filter((id) => !poolSet.has(id))
+  if (missing.length > 0) {
+    console.error(
+      `LIVE CHECK FAIL (MMR list question): final ids not in recipe.mmr.pool: ${missing.join(", ")} for "${MMR_LIST_QUESTION}"`
+    )
+    return false
+  }
+
+  console.log(
+    `ok (MMR list question): "${MMR_LIST_QUESTION}" -> b:mmr fired, pool sorted (${pool.length} ids), ${finalIds.length} final ids subset of pool`
+  )
+  return true
+}
+
 // v3: POST the same question to the live comprehend sidecar's /comprehend
 // endpoint 3 times and assert every response body is byte-identical JSON —
 // the sidecar must be a pure function of its input, not something with
@@ -216,13 +417,31 @@ async function main(): Promise<number> {
   const qOnOk = await runQState("1")
   const comprehendOk = await checkComprehendIdempotency()
   const fallbackOk = await checkFallbackQuestion()
+  const mmrFloorOk = await runMmrState("0")
+  const mmrOnOk = await runMmrState("1")
+  const captionsFloorOk = await runCaptionsState("0")
+  const captionsOnOk = await runCaptionsState("1")
+  const mmrListOk = await checkMmrListQuestion()
 
-  if (!floorOk || !laneOk || !qFloorOk || !qOnOk || !comprehendOk || !fallbackOk) {
+  if (
+    !floorOk ||
+    !laneOk ||
+    !qFloorOk ||
+    !qOnOk ||
+    !comprehendOk ||
+    !fallbackOk ||
+    !mmrFloorOk ||
+    !mmrOnOk ||
+    !captionsFloorOk ||
+    !captionsOnOk ||
+    !mmrListOk
+  ) {
     console.error("LIVE CHECK FAIL")
     return 1
   }
   console.log(
-    "LIVE CHECK PASS (CXN_LANE_P=0/1 determinism, CXN_Q=0/1 determinism, comprehend idempotency, fallback ordering all verified)"
+    "LIVE CHECK PASS (CXN_LANE_P=0/1 determinism, CXN_Q=0/1 determinism, comprehend idempotency, fallback ordering, " +
+      "CXN_MMR=0/1 determinism, CXN_CAPTIONS=0/1 determinism, MMR list-question pool invariant all verified)"
   )
   return 0
 }

@@ -23,6 +23,7 @@ import {
   denseScores,
   hydrationLines,
   lanePBoost,
+  mmrSelect,
   replyExpansion,
   temporalWindow,
   type Aggregates,
@@ -73,6 +74,10 @@ type CxnConfigV2 = CxnConfig &
       | "qSeedEntityW"
       | "qSeedVerbW"
       | "qSeedLaneW"
+      | "mmr"
+      | "mmrLambda"
+      | "captions"
+      | "captionDamp"
     >
   >
 
@@ -122,6 +127,7 @@ export class BonfiresCxnProvider implements Provider {
   private deps: CxnDeps | null
   private driver: Driver | null = null
   private bm25: Bm25Index | null = null
+  private captionBm25: Bm25Index | null = null
   private queryVectorMemo = new Map<string, number[]>()
   private comprehensionMemo = new Map<string, Comprehension>()
 
@@ -146,6 +152,7 @@ export class BonfiresCxnProvider implements Provider {
 
     const { cfg } = this.requireState2()
     this.ensureBm25()
+    this.ensureCaptionBm25()
 
     // Probe the Voyage key once, hard fail if it doesn't work.
     await embedTexts(["probe"], "query", cfg.voyageApiKey, this.deps.fetchImpl ?? (globalThis.fetch as FetchLike))
@@ -195,6 +202,34 @@ export class BonfiresCxnProvider implements Provider {
     const { artifacts } = this.requireState2()
     this.bm25 = buildBm25([...artifacts.statements.values()])
     return this.bm25
+  }
+
+  // Caption lane's own BM25 index — a SEPARATE index from ensureBm25()'s
+  // statement index (never merged), which is what makes the caption-isolation
+  // invariant (statement BM25 scores identical whether cfg.captions is on or
+  // off) hold structurally rather than by coincidence. Reuses buildBm25 via
+  // minimal StatementEntry-shaped literals: BM25 only reads hash+utterance,
+  // the rest (ts/actor_id/session) just satisfies the type and threads
+  // through unused. Returns null when captions are off or the artifact wasn't
+  // loaded, mirroring the two-flag guard search() itself uses.
+  private ensureCaptionBm25(): Bm25Index | null {
+    const { cfg, artifacts } = this.requireState2()
+    if (!cfg.captions || !artifacts.captions) return null
+    if (this.captionBm25) return this.captionBm25
+    this.captionBm25 = buildBm25(
+      [...artifacts.captions].map(
+        ([id, c]): StatementEntry => ({
+          hash: id,
+          utterance: `[image] ${c.caption}`,
+          ts: c.ts,
+          actor_id: c.actor_id,
+          session: c.session,
+          session_index: 0,
+          construct_ids: [],
+        })
+      )
+    )
+    return this.captionBm25
   }
 
   async preflight(): Promise<void> {
@@ -326,7 +361,36 @@ export class BonfiresCxnProvider implements Provider {
       affordancesFired.push("q:strata")
     }
 
-    // ---- temporal: comprehension-derived window when q+qGates, else legacy regex ----
+    // ---- caption lane (leg 5, spec §0.4): candidates merged in AFTER strata,
+    // BEFORE temporal — captions never receive the strata/seed boosts above
+    // (those loops key off statement construct_ids/fillers, and caption ids
+    // don't exist in `scores` yet when those channels ran), but DO compete
+    // for the temporal boost, pool cut, and final-K selection below like any
+    // other candidate. A separate dense/sparse/blend pass over the caption
+    // artifact (own BM25 index, own vectors) keeps this a structurally
+    // separate-index lane rather than a merge into the statement lane — the
+    // caption-isolation invariant (statement BM25 unchanged by cfg.captions)
+    // follows from never touching `this.bm25`/`sparse`/`dense` here.
+    let captionLanes: { dense: Map<string, number>; sparse: Map<string, number> } | null = null
+    let captionsInPool = 0
+    if (cfg.captions && artifacts.captions && artifacts.captionVectors) {
+      const captionBm25 = this.ensureCaptionBm25()!
+      const captionDense = denseScores(queryVector, artifacts.captionVectors)
+      const captionSparse = bm25Scores(captionBm25, query)
+      const captionBlended = blendScores(captionDense, captionSparse, cfg.blendDense, cfg.blendSparse)
+      for (const [id, score] of captionBlended) scores.set(id, score * cfg.captionDamp)
+      captionLanes = { dense: captionDense, sparse: captionSparse }
+    }
+
+    // ---- temporal: comprehension-derived window when q+qGates, else legacy
+    // regex. Unified id->ts map (statements ∪ captions) so a caption can be
+    // temporally boosted the same as a statement — otherwise a caption whose
+    // ts falls in the query's date window would silently never be reachable
+    // via that channel.
+    const tsById: Map<string, { ts: string }> = new Map(artifacts.statements)
+    if (cfg.captions && artifacts.captions) {
+      for (const [id, c] of artifacts.captions) tsById.set(id, { ts: c.ts })
+    }
     if (cfg.q && cfg.qGates) {
       // Deliberate spec deviation from §0.3(2): the gate fires only when
       // date_fillers is nonempty. A bare wh_slot === "when" derives no window
@@ -334,13 +398,13 @@ export class BonfiresCxnProvider implements Provider {
       // wording predates this comprehension shape.
       const window = comprehension ? temporalWindowFromDates(comprehension.date_fillers, CORPUS_YEAR) : null
       if (window) {
-        scores = applyTemporalBoost(scores, artifacts.statements, window, 0.15)
+        scores = applyTemporalBoost(scores, tsById, window, 0.15)
         affordancesFired.push("q:temporal")
       }
     } else {
       const window = temporalWindow(query)
       if (window) {
-        scores = applyTemporalBoost(scores, artifacts.statements, window, 0.15)
+        scores = applyTemporalBoost(scores, tsById, window, 0.15)
         gatesFired.push("temporal")
       }
     }
@@ -351,8 +415,27 @@ export class BonfiresCxnProvider implements Provider {
     const { added } = replyExpansion(pool, poolScores, artifacts.statements, 10, 0.8)
     if (added.length) gatesFired.push("reply")
     for (const { hash, score } of added) poolScores.set(hash, score)
-    const final = [...poolScores.entries()].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).slice(0, cfg.finalK)
+    if (cfg.captions && artifacts.captions) {
+      for (const hash of poolScores.keys()) if (artifacts.captions.has(hash)) captionsInPool += 1
+    }
+
+    // ---- final-K selection: MMR diversification (list-shape questions only)
+    // or the existing score-sort. mmrSelect only reorders WITHIN the pool —
+    // never imports new candidates — so `final ids ⊆ pool` holds by
+    // construction either way.
+    const mmrFired = cfg.mmr && cfg.q && comprehension?.wh_slot === "list"
+    const final = mmrFired
+      ? mmrSelect(
+          poolScores,
+          (id) => artifacts.vectors.get(id) ?? artifacts.captionVectors?.get(id),
+          cfg.finalK,
+          cfg.mmrLambda
+        )
+      : [...poolScores.entries()].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).slice(0, cfg.finalK)
+    if (mmrFired) affordancesFired.push("b:mmr")
     const finalHashes = final.map(([hash]) => hash)
+    // hydrationLines keys off artifacts.statements only — caption ids skip
+    // naturally (artifacts.statements.get(captionHash) misses -> `continue`).
     const lines = hydrationLines(finalHashes.slice(0, cfg.hydrateTop), artifacts.statements, artifacts.turns, cfg.hydrateWindow)
 
     // ---- answer directive ----
@@ -361,27 +444,43 @@ export class BonfiresCxnProvider implements Provider {
     if (directive) affordancesFired.push("q:answer")
 
     const querySha = new Bun.CryptoHasher("sha256").update(JSON.stringify(queryVector)).digest("hex").slice(0, 16)
+    const tsOf = (hash: string) => artifacts.statements.get(hash)?.ts ?? artifacts.captions?.get(hash)?.ts ?? ""
     const utteranceItems = final
       .sort((a, b) => {
-        const ta = artifacts.statements.get(a[0])?.ts ?? "",
-          tb = artifacts.statements.get(b[0])?.ts ?? ""
+        const ta = tsOf(a[0]), tb = tsOf(b[0])
         return ta < tb ? -1 : ta > tb ? 1 : a[0] < b[0] ? -1 : 1
       })
       .map(([hash, score]) => {
-        const entry = artifacts.statements.get(hash)!
+        const entry = artifacts.statements.get(hash)
+        if (entry) {
+          return {
+            text: `[${entry.ts.slice(0, 16).replace("T", " ")} ${entry.actor_id}] ${entry.utterance}`,
+            kind: "cxn_utterance" as const,
+            score,
+            metadata: {
+              utterance_hash: hash,
+              construct_ids: entry.construct_ids,
+              session: entry.session,
+              lanes: { dense: dense.get(hash) ?? 0, sparse: sparse.get(hash) ?? 0 },
+              query_vector_sha256: querySha,
+            },
+          }
+        }
+        // Caption item — artifacts.statements missed, so this hash must be a
+        // caption id (the only other candidate source competing in `scores`).
+        const caption = artifacts.captions!.get(hash)!
         return {
-          text: `[${entry.ts.slice(0, 16).replace("T", " ")} ${entry.actor_id}] ${entry.utterance}`,
+          text: `[${caption.ts.slice(0, 16).replace("T", " ")} ${caption.actor_id}] (image) ${caption.caption}`,
           kind: "cxn_utterance" as const,
           score,
           metadata: {
-            utterance_hash: hash,
-            construct_ids: entry.construct_ids,
-            session: entry.session,
-            lanes: { dense: dense.get(hash) ?? 0, sparse: sparse.get(hash) ?? 0 },
-            query_vector_sha256: querySha,
+            caption_id: hash,
+            lanes: { dense: captionLanes?.dense.get(hash) ?? 0, sparse: captionLanes?.sparse.get(hash) ?? 0 },
           },
         }
       })
+    const inFinalK = artifacts.captions ? finalHashes.filter((hash) => artifacts.captions!.has(hash)).length : 0
+    if (inFinalK > 0) affordancesFired.push("b:captions")
 
     const baseRecipe = {
       model: VOYAGE_MODEL,
@@ -413,6 +512,16 @@ export class BonfiresCxnProvider implements Provider {
           comprehend: comprehension
             ? { probe: comprehension.probe, matched_cxn_ids: comprehension.matched_cxn_ids, wh_slot: comprehension.wh_slot }
             : null,
+          ...(cfg.mmr
+            ? {
+                mmr: {
+                  enabled: cfg.mmr,
+                  lambda: cfg.mmrLambda,
+                  ...(mmrFired ? { pool: [...poolScores.keys()].sort() } : {}),
+                },
+              }
+            : {}),
+          ...(cfg.captions ? { captions: { loaded: artifacts.captions?.size ?? 0, inPool: captionsInPool, inFinalK } } : {}),
         }
       : baseRecipe
 
@@ -475,6 +584,11 @@ export class BonfiresCxnProvider implements Provider {
       qSeedEntityW: cfg.qSeedEntityW ?? 2.0,
       qSeedVerbW: cfg.qSeedVerbW ?? 1.0,
       qSeedLaneW: cfg.qSeedLaneW ?? 0.5,
+      // v4 (leg 5) — same `??` defaulting pattern as the v3 block above.
+      mmr: cfg.mmr ?? false,
+      mmrLambda: cfg.mmrLambda ?? 0.3,
+      captions: cfg.captions ?? false,
+      captionDamp: cfg.captionDamp ?? 1.0,
     } as CxnConfigV2
     if (cfgV3.q && !cfgV3.comprehendUrl) {
       throw new Error("bonfires-cxn: CXN_Q=1 requires comprehendUrl")

@@ -14,11 +14,14 @@ export function isFallback(c: Comprehension): boolean {
   return c.matched_cxn_ids.length === 0 && c.wh_slot === null && c.fillers.length === 0 && c.date_fillers.length === 0
 }
 
-// Affordance keys the comprehend sidecar can fire, per index.ts's search()
-// (`affordancesFired.push(...)`) — kept as a literal tuple (not derived from
-// the recipe) so gapmap.ts's computeAffordances can report all four keys at
-// rate 0 for a run with zero v3 recipe metadata, rather than an empty object.
-export const AFFORDANCE_KEYS = ["q:strata", "q:temporal", "q:seed", "q:answer"] as const
+// Affordance keys the comprehend sidecar / search() lanes can fire, per
+// index.ts's search() (`affordancesFired.push(...)`) — kept as a literal
+// tuple (not derived from the recipe) so gapmap.ts's computeAffordances can
+// report all keys at rate 0 for a run with zero v3/v4 recipe metadata, rather
+// than an empty object. b:mmr/b:captions (leg 5) are structural — fired by
+// the MMR gate / caption lane rather than the comprehend sidecar — but share
+// the same fire-rate reporting surface, hence the same tuple.
+export const AFFORDANCE_KEYS = ["q:strata", "q:temporal", "q:seed", "q:answer", "b:mmr", "b:captions"] as const
 export type AffordanceKey = (typeof AFFORDANCE_KEYS)[number]
 
 // corpus construct_ids (entry.construct_ids) are bound-firing-derived — the
