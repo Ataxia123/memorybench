@@ -602,6 +602,8 @@ describe("affordances (v3 fire rates + fallback rate)", () => {
       "q:temporal": 0,
       "q:seed": 0,
       "q:answer": 0,
+      "b:mmr": 0,
+      "b:captions": 0,
     })
     expect(report.affordances.fallbackRate).toBe(0)
     // fallbackByCategory still lists every category present (rate 0 each) —
