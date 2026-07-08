@@ -26,6 +26,21 @@ export interface CxnConfig {
   deltaEp?: number
   hydrateTop?: number
   hydrateWindow?: number
+  // v3 (kernel-native comprehend sidecar + four affordance channels). Optional
+  // at the type level for the same reason as the v2 block above: pre-existing
+  // leg-1/leg-2 fixtures that build a bare CxnConfig literal keep compiling
+  // unchanged; loadCxnConfig() always populates them (env-required iff q=1),
+  // and requireState2() defaults them at runtime for the injected-config path.
+  comprehendUrl?: string
+  q?: boolean
+  qStrata?: boolean
+  qGates?: boolean
+  qSeed?: boolean
+  qAnswer?: boolean
+  qDelta?: number
+  qSeedEntityW?: number
+  qSeedVerbW?: number
+  qSeedLaneW?: number
 }
 
 function required(env: Record<string, string | undefined>, key: string): string {
@@ -61,7 +76,7 @@ function optionalBool(env: Record<string, string | undefined>, key: string, fall
 }
 
 export function loadCxnConfig(env: Record<string, string | undefined> = process.env): CxnConfig {
-  return {
+  const config = {
     neo4jUri: required(env, "CXN_NEO4J_URI"),
     neo4jUser: required(env, "CXN_NEO4J_USER"),
     neo4jPassword: required(env, "CXN_NEO4J_PASSWORD"),
@@ -85,5 +100,19 @@ export function loadCxnConfig(env: Record<string, string | undefined> = process.
     deltaEp: optionalFloat(env, "CXN_DELTA_EP", 0.3),
     hydrateTop: optionalInt(env, "CXN_HYDRATE_TOP", 5),
     hydrateWindow: optionalInt(env, "CXN_HYDRATE_WINDOW", 2),
+    q: optionalBool(env, "CXN_Q", false),
+    comprehendUrl: env.CXN_COMPREHEND_URL?.trim() || undefined,
+    qStrata: optionalBool(env, "CXN_Q_STRATA", true),
+    qGates: optionalBool(env, "CXN_Q_GATES", true),
+    qSeed: optionalBool(env, "CXN_Q_SEED", true),
+    qAnswer: optionalBool(env, "CXN_Q_ANSWER", true),
+    qDelta: optionalFloat(env, "CXN_QDELTA", 0.3),
+    qSeedEntityW: optionalFloat(env, "CXN_QSEED_ENTITY_W", 2.0),
+    qSeedVerbW: optionalFloat(env, "CXN_QSEED_VERB_W", 1.0),
+    qSeedLaneW: optionalFloat(env, "CXN_QSEED_LANE_W", 0.5),
   }
+  if (config.q && !config.comprehendUrl) {
+    throw new Error("bonfires-cxn: CXN_Q=1 requires CXN_COMPREHEND_URL")
+  }
+  return config
 }

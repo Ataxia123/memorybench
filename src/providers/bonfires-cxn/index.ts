@@ -16,7 +16,8 @@ import {
   applyTemporalBoost,
   blendScores,
   bm25Scores,
-  buildAnswerPromptV2,
+  bm25ScoresWeighted,
+  buildAnswerPromptV3,
   buildBm25,
   denseScores,
   hydrationLines,
@@ -28,6 +29,15 @@ import {
   type StatementEntry,
   type Turn,
 } from "./retrieval2"
+import {
+  answerDirective,
+  combineSparse,
+  isFallback,
+  seededTermWeights,
+  strataBoost,
+  temporalWindowFromDates,
+  type Comprehension,
+} from "./affordance"
 
 export interface CxnDeps {
   runCypher: (query: string, params: Record<string, unknown>) => Promise<Record<string, unknown>[]>
@@ -51,8 +61,23 @@ type CxnConfigV2 = CxnConfig &
       | "deltaEp"
       | "hydrateTop"
       | "hydrateWindow"
+      | "q"
+      | "qStrata"
+      | "qGates"
+      | "qSeed"
+      | "qAnswer"
+      | "qDelta"
+      | "qSeedEntityW"
+      | "qSeedVerbW"
+      | "qSeedLaneW"
     >
   >
+
+interface SidecarHealth {
+  cards: number
+  digest: string
+  construct_ids: string[]
+}
 
 type CxnArtifactsV2 = CxnArtifacts &
   Required<Pick<CxnArtifacts, "statements" | "turns" | "vectors" | "aggregates">>
@@ -87,7 +112,7 @@ function driverDeps(driver: Driver): CxnDeps {
 export class BonfiresCxnProvider implements Provider {
   name = "bonfires-cxn"
   concurrency = { default: 5, ingest: 1 }
-  prompts = { answerPrompt: buildAnswerPromptV2 }
+  prompts = { answerPrompt: buildAnswerPromptV3 }
 
   private cfg: CxnConfig | null
   private artifacts: CxnArtifacts | null
@@ -95,6 +120,7 @@ export class BonfiresCxnProvider implements Provider {
   private driver: Driver | null = null
   private bm25: Bm25Index | null = null
   private queryVectorMemo = new Map<string, number[]>()
+  private comprehensionMemo = new Map<string, Comprehension>()
 
   // Test constructor: inject everything. Production path: no-arg + initialize().
   constructor(cfg?: CxnConfig, artifacts?: CxnArtifacts, deps?: CxnDeps) {
@@ -121,7 +147,39 @@ export class BonfiresCxnProvider implements Provider {
     // Probe the Voyage key once, hard fail if it doesn't work.
     await embedTexts(["probe"], "query", cfg.voyageApiKey, this.deps.fetchImpl ?? (globalThis.fetch as FetchLike))
 
+    if (cfg.q) await this.comprehendPreflight()
+
     logger.info(`bonfires-cxn: preflight OK for group ${cfg.groupId}`)
+  }
+
+  // Sidecar drift tripwire: every non-residual.v1 construct id that actually
+  // appears in the fold artifacts must be known to the live comprehend
+  // sidecar's grammar (health.construct_ids), or comprehension results would
+  // silently never strata-match against them.
+  private async comprehendPreflight(): Promise<void> {
+    const { cfg, artifacts, deps } = this.requireState2()
+    if (!cfg.comprehendUrl) throw new Error("bonfires-cxn: CXN_Q=1 requires comprehendUrl")
+    const fetchImpl = deps.fetchImpl ?? (globalThis.fetch as FetchLike)
+    const response = await fetchImpl(`${cfg.comprehendUrl}/health`, { method: "GET" })
+    if (!response.ok) {
+      throw new Error(`bonfires-cxn: comprehend sidecar /health failed (${response.status})`)
+    }
+    const health = (await response.json()) as SidecarHealth
+    if (!(health.cards >= 1)) {
+      throw new Error(`bonfires-cxn: comprehend sidecar reports ${health.cards} cards — grammar not loaded`)
+    }
+    const healthIds = new Set(health.construct_ids)
+    const missing = new Set<string>()
+    for (const entry of artifacts.statements.values()) {
+      for (const id of entry.construct_ids) {
+        if (id !== "residual.v1" && !healthIds.has(id)) missing.add(id)
+      }
+    }
+    if (missing.size > 0) {
+      throw new Error(
+        `bonfires-cxn: comprehend sidecar missing construct ids present in artifacts: ${[...missing].sort().join(", ")}`
+      )
+    }
   }
 
   // Built once (lazily). initialize() calls this eagerly for the production
@@ -191,10 +249,45 @@ export class BonfiresCxnProvider implements Provider {
     return vector
   }
 
+  private async comprehendQuery(query: string): Promise<Comprehension> {
+    const cached = this.comprehensionMemo.get(query)
+    if (cached) return cached
+    const { cfg, deps } = this.requireState2()
+    if (!cfg.comprehendUrl) throw new Error("bonfires-cxn: CXN_Q=1 requires comprehendUrl")
+    const fetchImpl = deps.fetchImpl ?? (globalThis.fetch as FetchLike)
+    const response = await fetchImpl(`${cfg.comprehendUrl}/comprehend`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: query }),
+    })
+    if (!response.ok) {
+      throw new Error(`bonfires-cxn: comprehend sidecar failed (${response.status}) — refusing silent floor fallback`)
+    }
+    const comprehension = (await response.json()) as Comprehension
+    this.comprehensionMemo.set(query, comprehension)
+    return comprehension
+  }
+
   async search(query: string, _options: SearchOptions): Promise<unknown[]> {
     const { cfg, artifacts } = this.requireState2()
-    const queryVector = await this.embedQuery(query) // live, memoized, HARD fail
-    const sparse = bm25Scores(this.ensureBm25(), query)
+    const [queryVector, comprehension] = await Promise.all([
+      this.embedQuery(query), // live, memoized, HARD fail
+      cfg.q ? this.comprehendQuery(query) : Promise.resolve(null),
+    ])
+    const affordancesFired: string[] = []
+
+    // ---- seed channel (before blend) ----
+    let sparse = bm25Scores(this.ensureBm25(), query)
+    if (cfg.q && cfg.qSeed && comprehension && comprehension.fillers.length) {
+      const seeded = bm25ScoresWeighted(
+        this.ensureBm25(),
+        seededTermWeights(comprehension.fillers, cfg.qSeedEntityW, cfg.qSeedVerbW)
+      )
+      sparse = combineSparse(sparse, seeded, cfg.qSeedLaneW)
+      affordancesFired.push("q:seed")
+    }
+
+    // ---- blend + lane P (unchanged) ----
     const dense = denseScores(queryVector, artifacts.vectors)
     let scores = blendScores(dense, sparse, cfg.blendDense, cfg.blendSparse)
     const gatesFired: string[] = []
@@ -212,11 +305,28 @@ export class BonfiresCxnProvider implements Provider {
       lanePTop = topContribs
       gatesFired.push("laneP")
     }
-    const window = temporalWindow(query)
-    if (window) {
-      scores = applyTemporalBoost(scores, artifacts.statements, window, 0.15)
-      gatesFired.push("temporal")
+
+    // ---- strata channel (after blend, before pool) ----
+    if (cfg.q && cfg.qStrata && comprehension && comprehension.matched_cxn_ids.length) {
+      scores = strataBoost(scores, artifacts.statements, comprehension.matched_cxn_ids, cfg.qDelta)
+      affordancesFired.push("q:strata")
     }
+
+    // ---- temporal: comprehension-derived window when q+qGates, else legacy regex ----
+    if (cfg.q && cfg.qGates) {
+      const window = comprehension ? temporalWindowFromDates(comprehension.date_fillers, 2023) : null
+      if (window) {
+        scores = applyTemporalBoost(scores, artifacts.statements, window, 0.15)
+        affordancesFired.push("q:temporal")
+      }
+    } else {
+      const window = temporalWindow(query)
+      if (window) {
+        scores = applyTemporalBoost(scores, artifacts.statements, window, 0.15)
+        gatesFired.push("temporal")
+      }
+    }
+
     const ranked = [...scores.entries()].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))
     const pool = ranked.slice(0, cfg.poolK).map(([hash]) => hash)
     const poolScores = new Map(ranked.slice(0, cfg.poolK))
@@ -226,6 +336,10 @@ export class BonfiresCxnProvider implements Provider {
     const final = [...poolScores.entries()].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).slice(0, cfg.finalK)
     const finalHashes = final.map(([hash]) => hash)
     const lines = hydrationLines(finalHashes.slice(0, cfg.hydrateTop), artifacts.statements, artifacts.turns, cfg.hydrateWindow)
+
+    // ---- answer directive ----
+    const directive = cfg.q && cfg.qAnswer ? answerDirective(comprehension?.wh_slot ?? null) : null
+    if (directive) affordancesFired.push("q:answer")
 
     const querySha = new Bun.CryptoHasher("sha256").update(JSON.stringify(queryVector)).digest("hex").slice(0, 16)
     const utteranceItems = final
@@ -249,23 +363,46 @@ export class BonfiresCxnProvider implements Provider {
           },
         }
       })
+
+    const baseRecipe = {
+      model: VOYAGE_MODEL,
+      laneP: cfg.laneP,
+      blendDense: cfg.blendDense,
+      blendSparse: cfg.blendSparse,
+      poolK: cfg.poolK,
+      finalK: cfg.finalK,
+      deltaCxn: cfg.deltaCxn,
+      deltaEp: cfg.deltaEp,
+      gatesFired,
+      lanePTop,
+    }
+    const recipe = cfg.q
+      ? {
+          ...baseRecipe,
+          q: cfg.q,
+          qStrata: cfg.qStrata,
+          qGates: cfg.qGates,
+          qSeed: cfg.qSeed,
+          qAnswer: cfg.qAnswer,
+          qDelta: cfg.qDelta,
+          qSeedEntityW: cfg.qSeedEntityW,
+          qSeedVerbW: cfg.qSeedVerbW,
+          qSeedLaneW: cfg.qSeedLaneW,
+          affordancesFired,
+          fallback: comprehension ? isFallback(comprehension) : false,
+          comprehend: comprehension
+            ? { probe: comprehension.probe, matched_cxn_ids: comprehension.matched_cxn_ids, wh_slot: comprehension.wh_slot }
+            : null,
+        }
+      : baseRecipe
+
     return [
       ...utteranceItems,
       {
         kind: "cxn_context",
         lines,
-        recipe: {
-          model: VOYAGE_MODEL,
-          laneP: cfg.laneP,
-          blendDense: cfg.blendDense,
-          blendSparse: cfg.blendSparse,
-          poolK: cfg.poolK,
-          finalK: cfg.finalK,
-          deltaCxn: cfg.deltaCxn,
-          deltaEp: cfg.deltaEp,
-          gatesFired,
-          lanePTop,
-        },
+        directive,
+        recipe,
       },
     ]
   }
@@ -302,7 +439,27 @@ export class BonfiresCxnProvider implements Provider {
     if (!artifacts.statements || !artifacts.turns || !artifacts.vectors || !artifacts.aggregates) {
       throw new Error("bonfires-cxn: provider not initialized with v2 artifacts")
     }
-    return { cfg: cfg as CxnConfigV2, artifacts: artifacts as CxnArtifactsV2, deps }
+    // v3 fields are defaulted here (mirroring loadCxnConfig's env defaults)
+    // rather than strictly required, so pre-v3 fixtures that build a bare
+    // CxnConfig literal (search2.test.ts, preflight.test.ts, config.test.ts,
+    // retrieval.test.ts) keep compiling AND behaving byte-identically —
+    // control parity holds whether q is `undefined` or explicit `false`.
+    const cfgV3: CxnConfigV2 = {
+      ...cfg,
+      q: cfg.q ?? false,
+      qStrata: cfg.qStrata ?? true,
+      qGates: cfg.qGates ?? true,
+      qSeed: cfg.qSeed ?? true,
+      qAnswer: cfg.qAnswer ?? true,
+      qDelta: cfg.qDelta ?? 0.3,
+      qSeedEntityW: cfg.qSeedEntityW ?? 2.0,
+      qSeedVerbW: cfg.qSeedVerbW ?? 1.0,
+      qSeedLaneW: cfg.qSeedLaneW ?? 0.5,
+    } as CxnConfigV2
+    if (cfgV3.q && !cfgV3.comprehendUrl) {
+      throw new Error("bonfires-cxn: CXN_Q=1 requires comprehendUrl")
+    }
+    return { cfg: cfgV3, artifacts: artifacts as CxnArtifactsV2, deps }
   }
 }
 
