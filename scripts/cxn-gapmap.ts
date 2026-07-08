@@ -18,6 +18,8 @@ import { join } from "node:path"
 import {
   classifyRun,
   loadGapInputs,
+  loadControlQuestions,
+  computeFlips,
   computeRawTokenJunkCounts,
   type GapReport,
 } from "../src/providers/bonfires-cxn/gapmap"
@@ -122,6 +124,52 @@ function renderMarkdown(
   }
   lines.push("")
 
+  lines.push("## Affordances (v3 comprehend-sidecar fire rates)", "")
+  lines.push(
+    "Rates are over SCORED questions (same denominator as `overall.total` — incomplete questions excluded). A run with no v3 recipe metadata at all (leg-1/leg-2 runs, or a v3 run re-run with `CXN_Q=0`) reports all-zero rates here rather than crashing.",
+    ""
+  )
+  lines.push("| affordance | fire rate |", "|---|---|")
+  for (const key of Object.keys(report.affordances.fireRates).sort()) {
+    lines.push(`| ${key} | ${report.affordances.fireRates[key]!.toFixed(4)} |`)
+  }
+  lines.push("", `Fallback rate (overall): ${report.affordances.fallbackRate.toFixed(4)}`, "")
+  lines.push("| category | fallback rate |", "|---|---|")
+  for (const key of Object.keys(report.affordances.fallbackByCategory).sort()) {
+    lines.push(`| ${key} | ${report.affordances.fallbackByCategory[key]!.toFixed(4)} |`)
+  }
+  lines.push("")
+
+  if (report.flips) {
+    lines.push("## Flips (--control-dir comparison)", "")
+    lines.push(
+      "Question ids correct in this run (\"arm\") but not in `--control-dir` (\"control\") are `gained`; ids correct in control but not in arm are `lost`.",
+      ""
+    )
+    lines.push(`### Gained (${report.flips.gained.length})`, "")
+    if (report.flips.gained.length === 0) {
+      lines.push("- none", "")
+    } else {
+      for (const id of report.flips.gained) lines.push(`- ${id}`)
+      lines.push("")
+    }
+    lines.push(`### Lost (${report.flips.lost.length})`, "")
+    if (report.flips.lost.length === 0) {
+      lines.push("- none", "")
+    } else {
+      for (const id of report.flips.lost) lines.push(`- ${id}`)
+      lines.push("")
+    }
+    lines.push("| category | gained | lost |", "|---|---|---|")
+    const categories = [
+      ...new Set([...Object.keys(report.flips.gainedByCategory), ...Object.keys(report.flips.lostByCategory)]),
+    ].sort()
+    for (const key of categories) {
+      lines.push(`| ${key} | ${report.flips.gainedByCategory[key] ?? 0} | ${report.flips.lostByCategory[key] ?? 0} |`)
+    }
+    lines.push("")
+  }
+
   lines.push("## Junk-seed report (top 10, literal spec via extractTerms, scoped to this run's questions)", "")
   lines.push(
     'STOPWORDS-filtered — names that are themselves stopwords (e.g. "who", "that") can never surface here because extractTerms strips them before the exact-token check runs. That degeneracy is itself the finding: the provider\'s term extraction already shields against stopword-named junk KG entities. Computed over only the questionIds that appear in this run, not the full LoCoMo corpus.',
@@ -157,7 +205,7 @@ async function main(): Promise<void> {
   if (missing.length > 0) {
     console.error(`missing required flag(s): ${missing.map((f) => `--${f}`).join(", ")}`)
     console.error(
-      "usage: bun run scripts/cxn-gapmap.ts --run-dir <dir> --batches <file> --log <file> --plan <file> --map <file> --out <dir>"
+      "usage: bun run scripts/cxn-gapmap.ts --run-dir <dir> --batches <file> --log <file> --plan <file> --map <file> --out <dir> [--control-dir <dir>]"
     )
     process.exit(1)
   }
@@ -187,6 +235,18 @@ async function main(): Promise<void> {
   })
 
   const report = classifyRun(inputs)
+
+  // Optional: compare this run ("arm") against a second run's verdicts
+  // ("control") — e.g. CXN_Q=1 vs CXN_Q=0 on the same fold. Control verdicts
+  // are read the same way the arm's are (checkpoint.json's
+  // questions[id].phases.evaluate.label), via the lighter loadControlQuestions
+  // loader (no evidence-linkage artifacts needed for a correctness-only
+  // comparison).
+  if (args["control-dir"]) {
+    const controlQuestions = await loadControlQuestions(args["control-dir"])
+    report.flips = computeFlips(inputs.questions, controlQuestions)
+  }
+
   // Scoped to this run's questionIds (M4), not the full ~1986-question
   // LoCoMo corpus — loadGapInputs already filtered allQuestionTexts down.
   const rawRemainder = computeRawTokenJunkCounts(inputs.allQuestionTexts)
@@ -198,6 +258,9 @@ async function main(): Promise<void> {
   console.log(
     `wrote ${join(outDir, "gap-report.json")} and ${join(outDir, "gap-report.md")} (${report.overall.total} questions, ${report.overall.correct} correct)`
   )
+  if (report.flips) {
+    console.log(`flips vs control (${args["control-dir"]}): gained=${report.flips.gained.length}, lost=${report.flips.lost.length}`)
+  }
 
   const incompleteTotal = report.incomplete.unevaluated + report.incomplete.missingResults
   if (incompleteTotal > 0) {

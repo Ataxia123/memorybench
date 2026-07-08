@@ -6,8 +6,11 @@ import { createHash } from "node:crypto"
 import {
   classifyRun,
   loadGapInputs,
+  loadControlQuestions,
   computeJunkSeedReport,
   computeRawTokenJunkCounts,
+  computeAffordances,
+  computeFlips,
   type GapInputs,
   type GapReport,
   type GapRunPaths,
@@ -294,6 +297,8 @@ describe("classifyRun (via loadGapInputs, synthetic run-dir fixture)", () => {
       correct: false,
       evidence: [],
       retrievedHashes: [],
+      affordancesFired: [],
+      fallback: false,
     })
     const report = classifyRun(inputs)
     expect(report.byCategory["world-knowledge"]!.missByClass.unlinked).toBe(1)
@@ -365,6 +370,8 @@ describe("Hit@20 (leg 2, decoupled from correctness)", () => {
           correct: false,
           evidence: ["D1:1; D1:2"],
           retrievedHashes: [],
+          affordancesFired: [],
+          fallback: false,
         },
       ],
       batchMessages: [
@@ -486,5 +493,229 @@ describe("junk-seed report", () => {
     expect(byName.get("who")).toBe(2)
     expect(byName.get("that")).toBe(2)
     expect(byName.get("true")).toBe(1)
+  })
+})
+
+// --- v3 affordances fixture: a run-dir where every result's cxn_context
+// item carries a v3 recipe (q: true) except conv-26-a3, which carries a
+// plain v2-shaped baseRecipe (no q fields at all) — exercising both "some
+// v3 metadata" and "no v3 metadata on one question of an otherwise-v3 run"
+// in a single fixture.
+function buildAffordancesFixture(): Fixture {
+  const root = mkdtempSync(join(tmpdir(), "cxn-gapmap-affordances-"))
+  const runDir = join(root, "run")
+  const resultsDir = join(runDir, "results")
+  mkdirSync(resultsDir, { recursive: true })
+
+  writeFileSync(
+    join(runDir, "checkpoint.json"),
+    JSON.stringify({
+      questions: {
+        "conv-26-a1": { phases: { evaluate: { label: "correct" } } },
+        "conv-26-a2": { phases: { evaluate: { label: "incorrect" } } },
+        "conv-26-a3": { phases: { evaluate: { label: "incorrect" } } },
+      },
+    })
+  )
+
+  function writeResult(id: string, recipe: Record<string, unknown>): void {
+    writeFileSync(
+      join(resultsDir, `${id}.json`),
+      JSON.stringify({
+        questionId: id,
+        question: "irrelevant for classifyRun",
+        questionType: "misc",
+        groundTruth: "irrelevant",
+        containerTag: `${id}-run`,
+        timestamp: "2026-07-07T00:00:00.000Z",
+        durationMs: 1,
+        results: [
+          {
+            text: "utterance",
+            kind: "cxn_utterance",
+            score: 1,
+            metadata: { utterance_hash: "h", firing_uuids: [], construct_ids: [], session: "s1" },
+          },
+          { kind: "cxn_context", lines: [], directive: null, recipe },
+        ],
+      })
+    )
+  }
+  // 2 of 3 questions fire q:answer; conv-26-a2 also carries fallback: true
+  // (the 1-of-3 fallback case) — matches the brief's scenario (a) exactly.
+  writeResult("conv-26-a1", { q: true, affordancesFired: ["q:answer"], fallback: false })
+  writeResult("conv-26-a2", { q: true, affordancesFired: ["q:answer"], fallback: true })
+  // conv-26-a3: v2-shaped baseRecipe (cfg.q === false path in index.ts's
+  // search()) — no affordancesFired/fallback keys on the recipe at all.
+  writeResult("conv-26-a3", { laneP: false, blendDense: 0.7, blendSparse: 0.3 })
+
+  writeFileSync(join(root, "batches.json"), JSON.stringify([]))
+  writeFileSync(join(root, "activation_log.jsonl"), "")
+  writeFileSync(join(root, "fold_plan.jsonl"), "")
+  writeFileSync(join(root, "map.json"), JSON.stringify({}))
+
+  return {
+    runDir,
+    batchesPath: join(root, "batches.json"),
+    logPath: join(root, "activation_log.jsonl"),
+    planPath: join(root, "fold_plan.jsonl"),
+    mapPath: join(root, "map.json"),
+    evidenceByQuestionId: {},
+    questionTextById: {
+      "conv-26-a1": "a1",
+      "conv-26-a2": "a2",
+      "conv-26-a3": "a3",
+    },
+  }
+}
+
+describe("affordances (v3 fire rates + fallback rate)", () => {
+  test("fireRates/fallbackRate are computed over scored questions (2/3 fire q:answer, 1/3 fallback)", async () => {
+    const fixture = buildAffordancesFixture()
+    const inputs = await loadGapInputs(fixture)
+    const report = classifyRun(inputs)
+
+    expect(report.overall.total).toBe(3)
+    expect(report.affordances.fireRates["q:answer"]).toBeCloseTo(2 / 3, 10)
+    expect(report.affordances.fireRates["q:strata"]).toBe(0)
+    expect(report.affordances.fireRates["q:temporal"]).toBe(0)
+    expect(report.affordances.fireRates["q:seed"]).toBe(0)
+    expect(report.affordances.fallbackRate).toBeCloseTo(1 / 3, 10)
+    expect(report.affordances.fallbackByCategory).toEqual({ misc: 1 / 3 })
+  })
+
+  test("computeAffordances matches classifyRun's affordances block for the same questions", async () => {
+    const fixture = buildAffordancesFixture()
+    const inputs = await loadGapInputs(fixture)
+    expect(computeAffordances(inputs.questions)).toEqual(classifyRun(inputs).affordances)
+  })
+
+  test("a v2-only run dir (no cxn_context recipe fields anywhere) yields all-zero affordance rates without crashing", async () => {
+    // buildFixture() (the leg-2 fixture used throughout this file) never
+    // attaches a cxn_context item at all — the purest "v2 shape" case.
+    const fixture = buildFixture()
+    const inputs = await loadGapInputs(fixture)
+    const report = classifyRun(inputs)
+
+    expect(report.affordances.fireRates).toEqual({
+      "q:strata": 0,
+      "q:temporal": 0,
+      "q:seed": 0,
+      "q:answer": 0,
+    })
+    expect(report.affordances.fallbackRate).toBe(0)
+    // fallbackByCategory still lists every category present (rate 0 each) —
+    // consistent with how byCategory always lists every category, at 0 when
+    // nothing of that kind occurred.
+    expect(report.affordances.fallbackByCategory).toEqual({
+      "multi-hop": 0,
+      "single-hop": 0,
+      temporal: 0,
+    })
+  })
+})
+
+// --- control-dir fixtures: two independent, minimal run dirs (no evidence
+// linkage needed — flips only care about questionId/questionType/correct).
+function buildArmFlipsFixture(): Fixture {
+  const root = mkdtempSync(join(tmpdir(), "cxn-gapmap-flips-arm-"))
+  const runDir = join(root, "run")
+  const resultsDir = join(runDir, "results")
+  mkdirSync(resultsDir, { recursive: true })
+
+  writeFileSync(
+    join(runDir, "checkpoint.json"),
+    JSON.stringify({
+      questions: {
+        q1: { phases: { evaluate: { label: "correct" } } },
+        q2: { phases: { evaluate: { label: "correct" } } },
+      },
+    })
+  )
+  for (const id of ["q1", "q2"]) {
+    writeFileSync(
+      join(resultsDir, `${id}.json`),
+      JSON.stringify({
+        questionId: id,
+        question: "irrelevant",
+        questionType: "misc",
+        groundTruth: "irrelevant",
+        containerTag: id,
+        timestamp: "2026-07-07T00:00:00.000Z",
+        durationMs: 1,
+        results: [],
+      })
+    )
+  }
+  writeFileSync(join(root, "batches.json"), JSON.stringify([]))
+  writeFileSync(join(root, "activation_log.jsonl"), "")
+  writeFileSync(join(root, "fold_plan.jsonl"), "")
+  writeFileSync(join(root, "map.json"), JSON.stringify({}))
+
+  return {
+    runDir,
+    batchesPath: join(root, "batches.json"),
+    logPath: join(root, "activation_log.jsonl"),
+    planPath: join(root, "fold_plan.jsonl"),
+    mapPath: join(root, "map.json"),
+    evidenceByQuestionId: {},
+    questionTextById: { q1: "q1", q2: "q2" },
+  }
+}
+
+// Returns just the runDir (loadControlQuestions only needs checkpoint.json +
+// results/, unlike the full GapRunPaths loadGapInputs needs).
+function buildControlFlipsRunDir(): string {
+  const root = mkdtempSync(join(tmpdir(), "cxn-gapmap-flips-control-"))
+  const runDir = join(root, "run")
+  const resultsDir = join(runDir, "results")
+  mkdirSync(resultsDir, { recursive: true })
+
+  writeFileSync(
+    join(runDir, "checkpoint.json"),
+    JSON.stringify({
+      questions: {
+        q2: { phases: { evaluate: { label: "correct" } } },
+        q3: { phases: { evaluate: { label: "correct" } } },
+      },
+    })
+  )
+  for (const id of ["q2", "q3"]) {
+    writeFileSync(
+      join(resultsDir, `${id}.json`),
+      JSON.stringify({
+        questionId: id,
+        question: "irrelevant",
+        questionType: "misc",
+        groundTruth: "irrelevant",
+        containerTag: id,
+        timestamp: "2026-07-07T00:00:00.000Z",
+        durationMs: 1,
+        results: [],
+      })
+    )
+  }
+  return runDir
+}
+
+describe("flips (--control-dir comparison)", () => {
+  test("gained = correct in arm but not control ([q1]); lost = correct in control but not arm ([q3]); sorted", async () => {
+    const armInputs = await loadGapInputs(buildArmFlipsFixture())
+    const controlQuestions = await loadControlQuestions(buildControlFlipsRunDir())
+
+    const flips = computeFlips(armInputs.questions, controlQuestions)
+    expect(flips.gained).toEqual(["q1"])
+    expect(flips.lost).toEqual(["q3"])
+    expect(flips.gainedByCategory).toEqual({ misc: 1 })
+    expect(flips.lostByCategory).toEqual({ misc: 1 })
+  })
+
+  test("q2 (correct in both arm and control) appears in neither gained nor lost", async () => {
+    const armInputs = await loadGapInputs(buildArmFlipsFixture())
+    const controlQuestions = await loadControlQuestions(buildControlFlipsRunDir())
+
+    const flips = computeFlips(armInputs.questions, controlQuestions)
+    expect(flips.gained).not.toContain("q2")
+    expect(flips.lost).not.toContain("q2")
   })
 })

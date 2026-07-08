@@ -82,6 +82,38 @@ export interface GapReport {
   }
   junkSeedReport: Array<{ name: string; questionCount: number }>
   unlinkedEvidence: string[]
+  // v3: comprehend-sidecar affordance channels (see src/providers/bonfires-cxn/
+  // index.ts's search(), recipe.affordancesFired/recipe.fallback, only present
+  // when the run had CXN_Q=1). Rates are over SCORED questions (the same
+  // denominator as `overall.total` — incomplete questions excluded). A run
+  // with no v3 recipe metadata at all (leg-1/leg-2 runs, or a v3 run re-run
+  // with CXN_Q=0) yields all-zero rates here rather than crashing — see
+  // computeAffordances / extractAffordances.
+  affordances: AffordancesReport
+  // v3: only present when the CLI was invoked with --control-dir. Compares
+  // this run's ("arm") per-question correctness against a second run's
+  // ("control") — see computeFlips.
+  flips?: FlipsReport
+}
+
+// Affordance keys the comprehend sidecar can fire, per src/providers/
+// bonfires-cxn/index.ts's search() (`affordancesFired.push("q:...")`) — kept
+// as a literal tuple (not derived from recipe) so a run with zero v3
+// metadata still reports all four keys at rate 0 rather than an empty object.
+export const AFFORDANCE_KEYS = ["q:strata", "q:temporal", "q:seed", "q:answer"] as const
+export type AffordanceKey = (typeof AFFORDANCE_KEYS)[number]
+
+export interface AffordancesReport {
+  fallbackRate: number
+  fallbackByCategory: Record<string, number>
+  fireRates: Record<string, number>
+}
+
+export interface FlipsReport {
+  gained: string[]
+  lost: string[]
+  gainedByCategory: Record<string, number>
+  lostByCategory: Record<string, number>
 }
 
 export interface GapQuestionResult {
@@ -90,6 +122,21 @@ export interface GapQuestionResult {
   correct: boolean
   evidence: string[]
   retrievedHashes: string[]
+  // v3: recipe.affordancesFired / recipe.fallback from the run's persisted
+  // cxn_context search item (see extractAffordances). Empty array / false
+  // when the run has no v3 recipe metadata at all — never absent, so
+  // computeAffordances never has to special-case v2 shape.
+  affordancesFired: string[]
+  fallback: boolean
+}
+
+// Minimal shape computeFlips needs — GapQuestionResult satisfies it
+// structurally, and loadControlQuestions returns exactly this (no evidence/
+// retrievedHashes needed for a correctness-only comparison run).
+export interface CorrectnessRecord {
+  questionId: string
+  questionType: string
+  correct: boolean
 }
 
 export interface BatchMessage {
@@ -264,6 +311,83 @@ const EMPTY_MISS_BY_CLASS: Record<MissClass, number> = {
   unlinked: 0,
 }
 
+// Rates are over SCORED questions — same population as `overall.total`
+// (questions.length here; incomplete questions never reach GapQuestionResult
+// at all, see loadGapInputs). A zero-length `questions` (e.g. wholly
+// incomplete run) yields all-zero rates rather than NaN.
+export function computeAffordances(questions: GapQuestionResult[]): AffordancesReport {
+  const total = questions.length
+
+  const fireCounts: Record<string, number> = {}
+  for (const key of AFFORDANCE_KEYS) fireCounts[key] = 0
+
+  let fallbackCount = 0
+  const totalByCategory = new Map<string, number>()
+  const fallbackCountByCategory = new Map<string, number>()
+
+  for (const q of questions) {
+    totalByCategory.set(q.questionType, (totalByCategory.get(q.questionType) ?? 0) + 1)
+    for (const key of q.affordancesFired) {
+      if (Object.prototype.hasOwnProperty.call(fireCounts, key)) fireCounts[key] += 1
+    }
+    if (q.fallback) {
+      fallbackCount += 1
+      fallbackCountByCategory.set(q.questionType, (fallbackCountByCategory.get(q.questionType) ?? 0) + 1)
+    }
+  }
+
+  const fireRates: Record<string, number> = {}
+  for (const key of AFFORDANCE_KEYS) fireRates[key] = total > 0 ? fireCounts[key]! / total : 0
+
+  const fallbackByCategory: Record<string, number> = {}
+  for (const category of [...totalByCategory.keys()].sort()) {
+    const categoryTotal = totalByCategory.get(category)!
+    fallbackByCategory[category] = categoryTotal > 0 ? (fallbackCountByCategory.get(category) ?? 0) / categoryTotal : 0
+  }
+
+  return {
+    fallbackRate: total > 0 ? fallbackCount / total : 0,
+    fallbackByCategory,
+    fireRates,
+  }
+}
+
+// Question ids "correct in arm but not control" (gained) and "correct in
+// control but not arm" (lost) — a per-question-id set comparison, not scoped
+// to ids present in both runs (a control run that never scored an id the arm
+// scored correctly still counts as a gain: the arm produced a correct answer
+// the control run didn't). *ByCategory buckets use the reporting side's own
+// questionType (arm's for gained, control's for lost) since that's the run
+// the id's category is actually being attributed to.
+export function computeFlips(arm: CorrectnessRecord[], control: CorrectnessRecord[]): FlipsReport {
+  const armById = new Map(arm.map((q) => [q.questionId, q]))
+  const controlById = new Map(control.map((q) => [q.questionId, q]))
+  const armCorrect = new Set(arm.filter((q) => q.correct).map((q) => q.questionId))
+  const controlCorrect = new Set(control.filter((q) => q.correct).map((q) => q.questionId))
+
+  const gained = [...armCorrect].filter((id) => !controlCorrect.has(id)).sort()
+  const lost = [...controlCorrect].filter((id) => !armCorrect.has(id)).sort()
+
+  const gainedByCategory: Record<string, number> = {}
+  for (const id of gained) {
+    const category = armById.get(id)?.questionType ?? "unknown"
+    gainedByCategory[category] = (gainedByCategory[category] ?? 0) + 1
+  }
+  const lostByCategory: Record<string, number> = {}
+  for (const id of lost) {
+    const category = controlById.get(id)?.questionType ?? "unknown"
+    lostByCategory[category] = (lostByCategory[category] ?? 0) + 1
+  }
+
+  const sortRecord = (rec: Record<string, number>): Record<string, number> => {
+    const out: Record<string, number> = {}
+    for (const key of Object.keys(rec).sort()) out[key] = rec[key]!
+    return out
+  }
+
+  return { gained, lost, gainedByCategory: sortRecord(gainedByCategory), lostByCategory: sortRecord(lostByCategory) }
+}
+
 export function classifyRun(inputs: GapInputs): GapReport {
   const total = inputs.questions.length
   const correct = inputs.questions.filter((q) => q.correct).length
@@ -347,6 +471,7 @@ export function classifyRun(inputs: GapInputs): GapReport {
     hitAt20: { overall: hitAt20Overall, byCategory: sortedHitAt20ByCategory },
     junkSeedReport: computeJunkSeedReport(inputs.allQuestionTexts),
     unlinkedEvidence: [...unlinkedSet].sort(),
+    affordances: computeAffordances(inputs.questions),
   }
 }
 
@@ -432,6 +557,30 @@ function flattenBatches(raw: unknown): BatchMessage[] {
   return out
 }
 
+// v3: pulls recipe.affordancesFired / recipe.fallback off the persisted
+// cxn_context search item (see src/providers/bonfires-cxn/index.ts's
+// search() — the last item in the returned array, kind === "cxn_context").
+// A v2 run (or a v3 run with CXN_Q=0, where recipe is baseRecipe with no q
+// fields at all) has no such fields on the recipe — or no cxn_context item
+// at all — and this falls through to the same {[], false} default either
+// way, which is exactly the "zero rates, no crash" requirement.
+function extractAffordances(raw: {
+  results?: Array<{ kind?: unknown; recipe?: unknown }>
+}): { affordancesFired: string[]; fallback: boolean } {
+  for (const item of raw.results ?? []) {
+    if (!item || typeof item !== "object" || item.kind !== "cxn_context") continue
+    const recipe = (item as { recipe?: unknown }).recipe
+    if (!recipe || typeof recipe !== "object") return { affordancesFired: [], fallback: false }
+    const recipeRecord = recipe as Record<string, unknown>
+    const affordancesFired = Array.isArray(recipeRecord.affordancesFired)
+      ? recipeRecord.affordancesFired.filter((v): v is string => typeof v === "string")
+      : []
+    const fallback = typeof recipeRecord.fallback === "boolean" ? recipeRecord.fallback : false
+    return { affordancesFired, fallback }
+  }
+  return { affordancesFired: [], fallback: false }
+}
+
 export interface GapRunPaths {
   runDir: string
   batchesPath: string
@@ -463,7 +612,7 @@ export async function loadGapInputs(paths: GapRunPaths): Promise<GapInputs> {
     const raw = JSON.parse(await readFile(join(resultsDir, file), "utf-8")) as {
       questionId: string
       questionType: string
-      results?: Array<{ metadata?: { utterance_hash?: string } }>
+      results?: Array<{ kind?: unknown; recipe?: unknown; metadata?: { utterance_hash?: string } }>
     }
     runQuestionIds.add(raw.questionId)
     const label = checkpointRaw.questions[raw.questionId]?.phases?.evaluate?.label
@@ -478,12 +627,15 @@ export async function loadGapInputs(paths: GapRunPaths): Promise<GapInputs> {
     const retrievedHashes = (raw.results ?? [])
       .map((r) => r.metadata?.utterance_hash)
       .filter((h): h is string => typeof h === "string")
+    const { affordancesFired, fallback } = extractAffordances(raw)
     questions.push({
       questionId: raw.questionId,
       questionType: raw.questionType,
       correct: label === "correct",
       evidence: paths.evidenceByQuestionId[raw.questionId] ?? [],
       retrievedHashes,
+      affordancesFired,
+      fallback,
     })
   }
 
@@ -517,4 +669,32 @@ export async function loadGapInputs(paths: GapRunPaths): Promise<GapInputs> {
     allQuestionTexts,
     incompleteQuestions,
   }
+}
+
+// v3 --control-dir support: a control run only needs to answer "was this
+// question id correct, and what category is it" to feed computeFlips — it
+// never needs evidence linkage (batches/log/plan/map), so this is a
+// deliberately lighter loader than loadGapInputs, not a re-use of it.
+// Incomplete questions (no evaluate label, e.g. still "pending") are
+// excluded the same way loadGapInputs excludes them from `questions` — a
+// question the control run never scored can't be "correct in control" for
+// the flips comparison.
+export async function loadControlQuestions(runDir: string): Promise<CorrectnessRecord[]> {
+  const checkpointRaw = JSON.parse(await readFile(join(runDir, "checkpoint.json"), "utf-8")) as {
+    questions: Record<string, { phases?: { evaluate?: { label?: string } } }>
+  }
+  const resultsDir = join(runDir, "results")
+  const resultFiles = (await readdir(resultsDir)).filter((f) => f.endsWith(".json")).sort()
+
+  const out: CorrectnessRecord[] = []
+  for (const file of resultFiles) {
+    const raw = JSON.parse(await readFile(join(resultsDir, file), "utf-8")) as {
+      questionId: string
+      questionType: string
+    }
+    const label = checkpointRaw.questions[raw.questionId]?.phases?.evaluate?.label
+    if (typeof label !== "string") continue
+    out.push({ questionId: raw.questionId, questionType: raw.questionType, correct: label === "correct" })
+  }
+  return out
 }
