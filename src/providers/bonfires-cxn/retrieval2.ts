@@ -44,20 +44,7 @@ export function buildBm25(statements: StatementEntry[]): Bm25Index {
 
 export function bm25Scores(index: Bm25Index, query: string): Map<string, number> {
   const terms = [...new Set(tokenize(query))]
-  const scores = new Map<string, number>()
-  for (const term of terms) {
-    const documentFrequency = index.df.get(term)
-    if (!documentFrequency) continue
-    const idf = Math.log(1 + (index.count - documentFrequency + 0.5) / (documentFrequency + 0.5))
-    for (const [hash, tf] of index.docTokens) {
-      const frequency = tf.get(term)
-      if (!frequency) continue
-      const length = index.docLength.get(hash) ?? 0
-      const denominator = frequency + K1 * (1 - B + (B * length) / index.avgLength)
-      scores.set(hash, (scores.get(hash) ?? 0) + idf * ((frequency * (K1 + 1)) / denominator))
-    }
-  }
-  return scores
+  return bm25ScoresWeighted(index, new Map(terms.map((term) => [term, 1])))
 }
 
 export function bm25ScoresWeighted(index: Bm25Index, termWeights: Map<string, number>): Map<string, number> {
