@@ -151,10 +151,7 @@ export class BonfiresKernelProvider implements Provider {
 
   async initialize(_config: ProviderConfig): Promise<void> {
     if (!this.cfg) this.cfg = loadKernelConfig()
-    if (this.cfg.expectedCardsDigest) {
-      await this.preflightCardsDigest()
-    }
-    logger.info(`bonfires-kernel: preflight OK for bonfire ${this.cfg.bonfireId}`)
+    logger.info(`bonfires-kernel: config loaded for bonfire ${this.cfg.bonfireId}`)
   }
 
   // Sidecar/cards drift tripwire: when KERNELB_EXPECTED_CARDS_DIGEST is set,
@@ -163,6 +160,14 @@ export class BonfiresKernelProvider implements Provider {
   // otherwise a score delta could be attributable to a silently-drifted
   // recipe instead of the served pipeline. Public for testability (mirrors
   // bonfires-cxn's comprehendPreflight()).
+  //
+  // Called from foldIndex() AFTER the fold POST succeeds (and after the
+  // census-digest tripwire check), NOT from initialize(). The cards digest
+  // GET /kernel/state reads is derived from cards ∪ census mint events — on
+  // a fresh bonfire, before any fold has run, that census doesn't exist yet
+  // and the state route 503s (`recipe_cards_missing`). Preflighting in
+  // initialize() therefore killed every fresh-bonfire run at startup, before
+  // the fold that would have produced the very digest being checked.
   async preflightCardsDigest(): Promise<void> {
     const cfg = this.requireConfig()
     const response = await this.fetchImpl(`${cfg.apiUrl}/bonfires/${cfg.bonfireId}/kernel/state`, {
@@ -249,6 +254,11 @@ export class BonfiresKernelProvider implements Provider {
           `got ${this.indexDiagnostics.census_digest ?? "(none)"} (fold likely re-extracted ` +
           `instead of hitting the pinned cache)`
       )
+    }
+    // Cards-digest preflight runs here, post-fold — see the doc comment on
+    // preflightCardsDigest() for why it can't run in initialize().
+    if (cfg.expectedCardsDigest) {
+      await this.preflightCardsDigest()
     }
   }
 

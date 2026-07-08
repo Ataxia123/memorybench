@@ -120,10 +120,33 @@ function session(id: string, messages: UnifiedSession["messages"]): UnifiedSessi
   return { sessionId: id, messages, metadata: { date: "2023-05-08" } }
 }
 
-describe("preflight (KERNELB_EXPECTED_CARDS_DIGEST)", () => {
-  test("passes when GET /kernel/state digest matches", async () => {
-    const fetchImpl: FetchLike = async () =>
-      new Response(JSON.stringify({ recipe: { cards_digest: "abc123" } }), { status: 200 })
+describe("preflight (KERNELB_EXPECTED_CARDS_DIGEST) — runs post-fold, not in initialize()", () => {
+  function makeFoldAndStateFetch(
+    cardsDigest: string,
+    calls: Array<{ method: string; url: string }>
+  ): FetchLike {
+    return async (url, init) => {
+      const method = init?.method ?? "GET"
+      calls.push({ method, url })
+      if (url.includes("/kernel/index")) {
+        return new Response(
+          JSON.stringify({ census_digest: "d1", statement_count: 1, construct_universe: [] }),
+          { status: 200 }
+        )
+      }
+      if (url.includes("/kernel/state")) {
+        return new Response(JSON.stringify({ recipe: { cards_digest: cardsDigest } }), {
+          status: 200,
+        })
+      }
+      throw new Error(`unexpected fetch in test: ${method} ${url}`)
+    }
+  }
+
+  test("initialize() never calls fetch — a fresh bonfire has no census yet and GET /kernel/state 503s pre-fold", async () => {
+    const fetchImpl: FetchLike = async () => {
+      throw new Error("initialize() must not fetch")
+    }
     const provider = new BonfiresKernelProvider(
       config({ expectedCardsDigest: "abc123" }),
       fetchImpl
@@ -131,22 +154,63 @@ describe("preflight (KERNELB_EXPECTED_CARDS_DIGEST)", () => {
     await provider.initialize({ apiKey: "k1" })
   })
 
-  test("throws on digest mismatch", async () => {
-    const fetchImpl: FetchLike = async () =>
-      new Response(JSON.stringify({ recipe: { cards_digest: "other" } }), { status: 200 })
+  test("passes when GET /kernel/state digest matches, called AFTER the fold POST (call order asserted)", async () => {
+    const calls: Array<{ method: string; url: string }> = []
+    const fetchImpl = makeFoldAndStateFetch("abc123", calls)
     const provider = new BonfiresKernelProvider(
       config({ expectedCardsDigest: "abc123" }),
       fetchImpl
     )
-    await expect(provider.initialize({ apiKey: "k1" })).rejects.toThrow(/cards_digest mismatch/)
+    await provider.initialize({ apiKey: "k1" })
+    const s1 = session("s1", [
+      { role: "user", content: "hi there", speaker: "Melanie", timestamp: "2023-05-08T10:00:00Z" },
+    ])
+    const result = await provider.ingest([s1], { containerTag: "q1" })
+    await provider.awaitIndexing(result, "q1")
+
+    expect(calls.length).toBe(2)
+    expect(calls[0]?.method).toBe("POST")
+    expect(calls[0]?.url).toContain("/kernel/index")
+    expect(calls[1]?.method).toBe("GET")
+    expect(calls[1]?.url).toContain("/kernel/state")
   })
 
-  test("skips preflight when no digest is configured", async () => {
-    const fetchImpl: FetchLike = async () => {
-      throw new Error("must not fetch when no expectedCardsDigest is set")
+  test("throws on digest mismatch, discovered only after the fold POST has already succeeded", async () => {
+    const calls: Array<{ method: string; url: string }> = []
+    const fetchImpl = makeFoldAndStateFetch("other", calls)
+    const provider = new BonfiresKernelProvider(
+      config({ expectedCardsDigest: "abc123" }),
+      fetchImpl
+    )
+    await provider.initialize({ apiKey: "k1" })
+    const s1 = session("s1", [
+      { role: "user", content: "hi there", speaker: "Melanie", timestamp: "2023-05-08T10:00:00Z" },
+    ])
+    const result = await provider.ingest([s1], { containerTag: "q1" })
+    await expect(provider.awaitIndexing(result, "q1")).rejects.toThrow(/cards_digest mismatch/)
+    // The fold POST already ran (and "succeeded") before the mismatch was discovered.
+    expect(calls.length).toBe(2)
+    expect(calls[0]?.method).toBe("POST")
+    expect(calls[1]?.method).toBe("GET")
+  })
+
+  test("skips preflight (no GET /kernel/state at all) when no digest is configured", async () => {
+    const fetchImpl: FetchLike = async (url) => {
+      if (url.includes("/kernel/state")) {
+        throw new Error("must not fetch /kernel/state when no expectedCardsDigest is set")
+      }
+      return new Response(
+        JSON.stringify({ census_digest: "d1", statement_count: 1, construct_universe: [] }),
+        { status: 200 }
+      )
     }
     const provider = new BonfiresKernelProvider(config(), fetchImpl)
     await provider.initialize({ apiKey: "k1" })
+    const s1 = session("s1", [
+      { role: "user", content: "hi there", speaker: "Melanie", timestamp: "2023-05-08T10:00:00Z" },
+    ])
+    const result = await provider.ingest([s1], { containerTag: "q1" })
+    await provider.awaitIndexing(result, "q1")
   })
 })
 
