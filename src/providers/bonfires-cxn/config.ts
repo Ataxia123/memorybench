@@ -138,5 +138,8 @@ export function loadCxnConfig(env: Record<string, string | undefined> = process.
   if (config.mmr && !config.q) {
     throw new Error("bonfires-cxn: CXN_MMR=1 requires CXN_Q=1 (CXN_MMR needs CXN_Q)")
   }
+  if (config.captions && !config.q) {
+    throw new Error("bonfires-cxn: CXN_CAPTIONS=1 requires CXN_Q=1 (caption lane attribution lives in the q recipe)")
+  }
   return config
 }

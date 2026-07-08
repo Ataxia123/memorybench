@@ -39,6 +39,13 @@ describe("config v4 (leg 5)", () => {
     expect(() => loadCxnConfig(env)).toThrow(/CXN_MMR.*CXN_Q|CXN_Q.*CXN_MMR/)
     expect(loadCxnConfig({ ...baseEnv, CXN_MMR: "1" }).mmr).toBe(true)
   })
+  test("CXN_CAPTIONS=1 without CXN_Q throws loudly", () => {
+    const env = { ...baseEnv, CXN_CAPTIONS: "1", CXN_CAPTIONS_PATH: "/tmp/cap.json" }
+    delete (env as Record<string, string | undefined>).CXN_Q
+    delete (env as Record<string, string | undefined>).CXN_COMPREHEND_URL
+    expect(() => loadCxnConfig(env)).toThrow(/CXN_CAPTIONS.*CXN_Q|CXN_Q.*CXN_CAPTIONS/)
+    expect(loadCxnConfig({ ...baseEnv, CXN_CAPTIONS: "1", CXN_CAPTIONS_PATH: "/tmp/cap.json" }).captions).toBe(true)
+  })
 })
 
 // ---------- loader fixture helpers (mirrors artifacts.test.ts) ----------
@@ -164,6 +171,17 @@ describe("captions loader (leg 5)", () => {
     )
   })
 
+  test("caption id colliding with an existing statement hash throws naming the id", async () => {
+    const cfg = fixtureConfig()
+    // "abc123abc123abc1" is the statement hash minted by writeV2Fixtures above.
+    const captionsPath = writeCaptionsFixture(cfg.artifactsDir, {
+      abc123abc123abc1: { caption: "a cat sleeping", ts: "2023-05-08T13:56:30Z", actor_id: "Melanie", session: "s1", vector: [1, 0, 0] },
+    })
+    await expect(loadArtifacts({ ...cfg, captions: true, captionsPath })).rejects.toThrow(
+      /caption id abc123abc123abc1 collides with a statement hash/
+    )
+  })
+
   test("cfg.captions false => captions/captionVectors undefined even if path set", async () => {
     const cfg = fixtureConfig()
     const captionsPath = writeCaptionsFixture(cfg.artifactsDir, {
@@ -234,7 +252,7 @@ interface ContextItemV4 {
     fallback?: boolean
     comprehend?: { probe: string; matched_cxn_ids: string[]; wh_slot: string | null } | null
     mmr?: { enabled: boolean; lambda: number; pool?: string[] }
-    captions?: { loaded: number; inPool: number; inFinalK: number }
+    captions?: { loaded: number; inPool: number; inFinalK: number; damp: number }
   }
 }
 
@@ -409,7 +427,8 @@ describe("search v4 — leg 5 lanes (caption lane + MMR gate)", () => {
     expect(captionItem!.metadata.lanes.dense).toBeCloseTo(1, 5)
 
     const recipe = results.filter(isContextV4)[0]!.recipe
-    expect(recipe.captions).toEqual({ loaded: 1, inPool: 1, inFinalK: 1 })
+    expect(recipe.captions).toEqual({ loaded: 1, inPool: 1, inFinalK: 1, damp: 1 })
+    expect(recipe.captions!.damp).toBe(1)
     expect(recipe.affordancesFired).toContain("b:captions")
   })
 

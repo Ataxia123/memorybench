@@ -148,6 +148,9 @@ export async function loadArtifacts(cfg: CxnConfig): Promise<CxnArtifacts> {
     captions = new Map()
     captionVectors = new Map()
     for (const id of Object.keys(captionsRaw.items).sort()) {
+      if (statements.has(id)) {
+        throw new Error(`bonfires-cxn: caption id ${id} collides with a statement hash`)
+      }
       const { vector, ...entry } = captionsRaw.items[id]!
       if (vector.length !== dim) {
         throw new Error(

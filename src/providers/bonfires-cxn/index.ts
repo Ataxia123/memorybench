@@ -521,7 +521,9 @@ export class BonfiresCxnProvider implements Provider {
                 },
               }
             : {}),
-          ...(cfg.captions ? { captions: { loaded: artifacts.captions?.size ?? 0, inPool: captionsInPool, inFinalK } } : {}),
+          ...(cfg.captions
+            ? { captions: { loaded: artifacts.captions?.size ?? 0, inPool: captionsInPool, inFinalK, damp: cfg.captionDamp } }
+            : {}),
         }
       : baseRecipe
 
