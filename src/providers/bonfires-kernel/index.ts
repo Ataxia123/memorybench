@@ -203,7 +203,25 @@ export class BonfiresKernelProvider implements Provider {
     onProgress?: IndexingProgressCallback
   ): Promise<void> {
     if (!this.indexingDone) {
-      await this.foldIndex()
+      const cfg = this.requireConfig()
+      if (cfg.skipFold) {
+        // Search-only mode (KERNELB_SKIP_FOLD): the artifact bundle (fold
+        // output + pinned normalization cache) was staged out-of-band, so
+        // never POST /kernel/index here — that would burn a redundant LLM
+        // extraction pass and, against a READONLY-pinned cache, silently
+        // no-op the fold's own cache writes. Still preflight the cards
+        // digest (if configured) so a mismatched pre-folded bonfire fails
+        // loudly instead of silently scoring against the wrong artifact.
+        logger.info(
+          "bonfires-kernel: KERNELB_SKIP_FOLD set — skipping POST /kernel/index " +
+            "(search-only mode over a pre-folded bonfire)"
+        )
+        if (cfg.expectedCardsDigest) {
+          await this.preflightCardsDigest()
+        }
+      } else {
+        await this.foldIndex()
+      }
       this.indexingDone = true
     }
     onProgress?.({

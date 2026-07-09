@@ -22,12 +22,38 @@ export interface KernelConfig {
   // response's `census_digest` differs from this value — a loud signal
   // that the fold re-extracted instead of hitting the pinned cache.
   expectedCensusDigest?: string
+  // Search-only mode (KERNELB_SKIP_FOLD): when true, awaitIndexing() never
+  // POSTs /kernel/index at all — no fold runs. This exists for parity/resume
+  // runs where the artifact bundle (fold output + pinned normalization cache)
+  // was staged out-of-band and the bonfire is already folded; re-running the
+  // fold here would be redundant at best and, against a READONLY-pinned
+  // cache, would just no-op the fold's cache writes while still burning an
+  // LLM extraction pass. The bench still preflights `KERNELB_EXPECTED_CARDS_DIGEST`
+  // (if set) so a mismatched pre-folded bonfire fails loudly instead of
+  // silently scoring against the wrong artifact. Default false (normal fold
+  // path, unchanged).
+  skipFold: boolean
 }
 
 function required(env: Record<string, string | undefined>, key: string): string {
   const value = env[key]?.trim()
   if (!value) throw new Error(`bonfires-kernel: missing required env ${key}`)
   return value
+}
+
+function optionalBool(
+  env: Record<string, string | undefined>,
+  key: string,
+  fallback: boolean
+): boolean {
+  const raw = env[key]?.trim()
+  if (!raw) return fallback
+  const lower = raw.toLowerCase()
+  if (lower === "1" || lower === "true") return true
+  if (lower === "0" || lower === "false") return false
+  throw new Error(
+    `bonfires-kernel: ${key} must be one of "", "0", "1", "true", "false" (case-insensitive), got "${raw}"`
+  )
 }
 
 export function loadKernelConfig(
@@ -41,5 +67,6 @@ export function loadKernelConfig(
     expectedCardsDigest: env.KERNELB_EXPECTED_CARDS_DIGEST?.trim() || undefined,
     batchesPath: env.KERNELB_BATCHES_PATH?.trim() || undefined,
     expectedCensusDigest: env.KERNELB_EXPECTED_CENSUS_DIGEST?.trim() || undefined,
+    skipFold: optionalBool(env, "KERNELB_SKIP_FOLD", false),
   }
 }

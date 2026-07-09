@@ -104,6 +104,27 @@ describe("loadKernelConfig", () => {
     expect(cfg.batchesPath).toBe("/tmp/conv26_batches.json")
     expect(cfg.expectedCensusDigest).toBe("digest123")
   })
+
+  test("defaults skipFold to false", () => {
+    const cfg = loadKernelConfig(baseEnv())
+    expect(cfg.skipFold).toBe(false)
+  })
+
+  test.each(["1", "true", "TRUE"])("KERNELB_SKIP_FOLD=%s parses to true", (value) => {
+    const cfg = loadKernelConfig(baseEnv({ KERNELB_SKIP_FOLD: value }))
+    expect(cfg.skipFold).toBe(true)
+  })
+
+  test.each(["0", "false", "FALSE"])("KERNELB_SKIP_FOLD=%s parses to false", (value) => {
+    const cfg = loadKernelConfig(baseEnv({ KERNELB_SKIP_FOLD: value }))
+    expect(cfg.skipFold).toBe(false)
+  })
+
+  test("KERNELB_SKIP_FOLD with a non-bool value throws (strict bool)", () => {
+    expect(() => loadKernelConfig(baseEnv({ KERNELB_SKIP_FOLD: "yes" }))).toThrow(
+      /KERNELB_SKIP_FOLD must be one of/
+    )
+  })
 })
 
 function config(overrides: Partial<KernelConfig> = {}): KernelConfig {
@@ -112,6 +133,7 @@ function config(overrides: Partial<KernelConfig> = {}): KernelConfig {
     bonfireId: "bf1",
     apiKey: "k1",
     actorId: "bench",
+    skipFold: false,
     ...overrides,
   }
 }
@@ -375,6 +397,76 @@ describe("census-digest tripwire (KERNELB_EXPECTED_CENSUS_DIGEST)", () => {
     await expect(provider.awaitIndexing(result, "q1")).rejects.toThrow(
       /census_digest mismatch — expected expected-digest, got drifted-digest/
     )
+  })
+})
+
+describe("skip-fold mode (KERNELB_SKIP_FOLD) — search-only over a pre-folded bonfire", () => {
+  test("issues zero index POSTs and no preflight when no digest is configured", async () => {
+    const calls: Array<{ method: string; url: string }> = []
+    const fetchImpl: FetchLike = async (url, init) => {
+      calls.push({ method: init?.method ?? "GET", url })
+      throw new Error(`unexpected fetch in test: ${url}`)
+    }
+    const provider = new BonfiresKernelProvider(config({ skipFold: true }), fetchImpl)
+    const s1 = session("s1", [
+      { role: "user", content: "hi there", speaker: "Melanie", timestamp: "2023-05-08T10:00:00Z" },
+    ])
+    const result = await provider.ingest([s1], { containerTag: "q1" })
+    await provider.awaitIndexing(result, "q1")
+    expect(calls.length).toBe(0)
+
+    // A second call (another question sharing the same corpus) must also
+    // never fetch — the indexingDone guard applies to skip-fold mode too.
+    await provider.awaitIndexing(result, "q2")
+    expect(calls.length).toBe(0)
+  })
+
+  test("still preflights GET /kernel/state when KERNELB_EXPECTED_CARDS_DIGEST is set, and passes on match", async () => {
+    const calls: Array<{ method: string; url: string }> = []
+    const fetchImpl: FetchLike = async (url, init) => {
+      const method = init?.method ?? "GET"
+      calls.push({ method, url })
+      if (url.includes("/kernel/state")) {
+        return new Response(JSON.stringify({ recipe: { cards_digest: "abc123" } }), { status: 200 })
+      }
+      throw new Error(`unexpected fetch in test: ${method} ${url}`)
+    }
+    const provider = new BonfiresKernelProvider(
+      config({ skipFold: true, expectedCardsDigest: "abc123" }),
+      fetchImpl
+    )
+    const s1 = session("s1", [
+      { role: "user", content: "hi there", speaker: "Melanie", timestamp: "2023-05-08T10:00:00Z" },
+    ])
+    const result = await provider.ingest([s1], { containerTag: "q1" })
+    await provider.awaitIndexing(result, "q1")
+
+    expect(calls.length).toBe(1)
+    expect(calls[0]?.method).toBe("GET")
+    expect(calls[0]?.url).toContain("/kernel/state")
+  })
+
+  test("digest mismatch throws — never POSTs /kernel/index even though it fails", async () => {
+    const calls: Array<{ method: string; url: string }> = []
+    const fetchImpl: FetchLike = async (url, init) => {
+      const method = init?.method ?? "GET"
+      calls.push({ method, url })
+      if (url.includes("/kernel/state")) {
+        return new Response(JSON.stringify({ recipe: { cards_digest: "other" } }), { status: 200 })
+      }
+      throw new Error(`unexpected fetch in test: ${method} ${url}`)
+    }
+    const provider = new BonfiresKernelProvider(
+      config({ skipFold: true, expectedCardsDigest: "abc123" }),
+      fetchImpl
+    )
+    const s1 = session("s1", [
+      { role: "user", content: "hi there", speaker: "Melanie", timestamp: "2023-05-08T10:00:00Z" },
+    ])
+    const result = await provider.ingest([s1], { containerTag: "q1" })
+    await expect(provider.awaitIndexing(result, "q1")).rejects.toThrow(/cards_digest mismatch/)
+    expect(calls.length).toBe(1)
+    expect(calls.some((c) => c.url.includes("/kernel/index"))).toBe(false)
   })
 })
 
