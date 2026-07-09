@@ -481,7 +481,9 @@ describe("skip-fold mode (KERNELB_SKIP_FOLD) — search-only over a pre-folded b
       const method = init?.method ?? "GET"
       calls.push({ method, url })
       if (url.includes("/kernel/state")) {
-        return new Response(JSON.stringify({ census_digest: "expected-digest" }), { status: 200 })
+        return new Response(JSON.stringify({ recipe: { census_digest: "expected-digest" } }), {
+          status: 200,
+        })
       }
       throw new Error(`unexpected fetch in test: ${method} ${url}`)
     }
@@ -504,7 +506,9 @@ describe("skip-fold mode (KERNELB_SKIP_FOLD) — search-only over a pre-folded b
       const method = init?.method ?? "GET"
       calls.push({ method, url })
       if (url.includes("/kernel/state")) {
-        return new Response(JSON.stringify({ census_digest: "drifted-digest" }), { status: 200 })
+        return new Response(JSON.stringify({ recipe: { census_digest: "drifted-digest" } }), {
+          status: 200,
+        })
       }
       throw new Error(`unexpected fetch in test: ${method} ${url}`)
     }
@@ -554,7 +558,7 @@ describe("skip-fold mode (KERNELB_SKIP_FOLD) — search-only over a pre-folded b
       calls.push({ method, url })
       if (url.includes("/kernel/state")) {
         return new Response(
-          JSON.stringify({ recipe: { cards_digest: "abc123" }, census_digest: "expected-digest" }),
+          JSON.stringify({ recipe: { cards_digest: "abc123", census_digest: "expected-digest" } }),
           { status: 200 }
         )
       }

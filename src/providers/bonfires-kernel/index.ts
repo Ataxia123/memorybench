@@ -62,13 +62,18 @@ export function mapSearchEnvelope(envelope: KernelSearchEnvelope): unknown[] {
 }
 
 /** Wire shape of `GET /bonfires/{id}/kernel/state` (only the fields this
- * provider reads — see kernel_dto.py:KernelStateResponse). `census_digest` is
- * named to mirror the fold response's own field (KernelIndexResponseWire
- * below) — see the doc comment on `checkCensusDigest` for why an absent
- * field is treated the same as a mismatch rather than "no check to do". */
+ * provider reads — see kernel_dto.py:KernelStateResponse). `census_digest`
+ * lives under the `recipe` key alongside `cards_digest` (both come from
+ * recipe_state_extra in graph-memory's recipe_support.py); it mirrors the
+ * fold response's own top-level field (KernelIndexResponseWire below) — see
+ * the doc comment on `checkCensusDigest` for why an absent field is treated
+ * the same as a mismatch rather than "no check to do". */
 interface KernelStateResponse {
-  recipe?: { cards_digest?: string; construct_universe_size?: number } | null
-  census_digest?: string | null
+  recipe?: {
+    cards_digest?: string
+    construct_universe_size?: number
+    census_digest?: string | null
+  } | null
 }
 
 /** Wire shape of `POST /bonfires/{id}/kernel/search` (see
@@ -207,14 +212,15 @@ export class BonfiresKernelProvider implements Provider {
   // ever compared it to anything. That is exactly the loud-over-silent
   // violation this tripwire exists to prevent, and it hit in precisely the
   // mode the parity run used. Made functional here: compare the expected
-  // digest against GET /kernel/state's `census_digest`, throwing on a
-  // mismatch OR when the field is absent — an absent field means this
-  // graph-memory build can't attest to which extraction produced the
+  // digest against GET /kernel/state's `recipe.census_digest` (served from
+  // the bonfire's census.json on disk), throwing on a mismatch OR when the
+  // field is absent — absent means the bonfire has no census.json (never
+  // folded), so graph-memory can't attest to which extraction produced the
   // pre-folded artifacts a skip-fold run is about to score against, which is
   // the same silent-drift risk as a mismatch and must fail loud, not pass.
   private checkCensusDigest(state: KernelStateResponse): void {
     const cfg = this.requireConfig()
-    const actual = state.census_digest
+    const actual = state.recipe?.census_digest
     if (actual !== cfg.expectedCensusDigest) {
       throw new Error(
         `bonfires-kernel: skip-fold census_digest mismatch — expected ${cfg.expectedCensusDigest}, ` +
