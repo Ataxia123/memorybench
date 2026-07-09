@@ -62,9 +62,13 @@ export function mapSearchEnvelope(envelope: KernelSearchEnvelope): unknown[] {
 }
 
 /** Wire shape of `GET /bonfires/{id}/kernel/state` (only the fields this
- * provider reads — see kernel_dto.py:KernelStateResponse). */
+ * provider reads — see kernel_dto.py:KernelStateResponse). `census_digest` is
+ * named to mirror the fold response's own field (KernelIndexResponseWire
+ * below) — see the doc comment on `checkCensusDigest` for why an absent
+ * field is treated the same as a mismatch rather than "no check to do". */
 interface KernelStateResponse {
   recipe?: { cards_digest?: string; construct_universe_size?: number } | null
+  census_digest?: string | null
 }
 
 /** Wire shape of `POST /bonfires/{id}/kernel/search` (see
@@ -169,6 +173,11 @@ export class BonfiresKernelProvider implements Provider {
   // initialize() therefore killed every fresh-bonfire run at startup, before
   // the fold that would have produced the very digest being checked.
   async preflightCardsDigest(): Promise<void> {
+    const state = await this.fetchKernelState()
+    this.checkCardsDigest(state)
+  }
+
+  private async fetchKernelState(): Promise<KernelStateResponse> {
     const cfg = this.requireConfig()
     const response = await this.fetchImpl(`${cfg.apiUrl}/bonfires/${cfg.bonfireId}/kernel/state`, {
       method: "GET",
@@ -177,11 +186,39 @@ export class BonfiresKernelProvider implements Provider {
     if (!response.ok) {
       throw new Error(`bonfires-kernel: preflight GET /kernel/state failed (${response.status})`)
     }
-    const state = (await response.json()) as KernelStateResponse
+    return (await response.json()) as KernelStateResponse
+  }
+
+  private checkCardsDigest(state: KernelStateResponse): void {
+    const cfg = this.requireConfig()
     const actual = state.recipe?.cards_digest
     if (actual !== cfg.expectedCardsDigest) {
       throw new Error(
         `bonfires-kernel: cards_digest mismatch — expected ${cfg.expectedCardsDigest}, got ${actual ?? "(none)"}`
+      )
+    }
+  }
+
+  // Skip-fold census tripwire (KERNELB_EXPECTED_CENSUS_DIGEST): in the normal
+  // fold path this env var is checked against the fold POST's own response
+  // (see foldIndex()). In skip-fold mode there is no fold POST to check
+  // against, so — before this method existed — setting the env var in
+  // skip-fold mode was silently inert: it was read into config but nothing
+  // ever compared it to anything. That is exactly the loud-over-silent
+  // violation this tripwire exists to prevent, and it hit in precisely the
+  // mode the parity run used. Made functional here: compare the expected
+  // digest against GET /kernel/state's `census_digest`, throwing on a
+  // mismatch OR when the field is absent — an absent field means this
+  // graph-memory build can't attest to which extraction produced the
+  // pre-folded artifacts a skip-fold run is about to score against, which is
+  // the same silent-drift risk as a mismatch and must fail loud, not pass.
+  private checkCensusDigest(state: KernelStateResponse): void {
+    const cfg = this.requireConfig()
+    const actual = state.census_digest
+    if (actual !== cfg.expectedCensusDigest) {
+      throw new Error(
+        `bonfires-kernel: skip-fold census_digest mismatch — expected ${cfg.expectedCensusDigest}, ` +
+          `got ${actual ?? "(absent from GET /kernel/state)"}`
       )
     }
   }
@@ -210,14 +247,22 @@ export class BonfiresKernelProvider implements Provider {
         // never POST /kernel/index here — that would burn a redundant LLM
         // extraction pass and, against a READONLY-pinned cache, silently
         // no-op the fold's own cache writes. Still preflight the cards
-        // digest (if configured) so a mismatched pre-folded bonfire fails
-        // loudly instead of silently scoring against the wrong artifact.
+        // digest and/or census digest (whichever are configured) so a
+        // mismatched pre-folded bonfire fails loudly instead of silently
+        // scoring against the wrong artifact. One shared GET /kernel/state
+        // fetch backs both checks — no second HTTP call.
         logger.info(
           "bonfires-kernel: KERNELB_SKIP_FOLD set — skipping POST /kernel/index " +
             "(search-only mode over a pre-folded bonfire)"
         )
-        if (cfg.expectedCardsDigest) {
-          await this.preflightCardsDigest()
+        if (cfg.expectedCardsDigest || cfg.expectedCensusDigest) {
+          const state = await this.fetchKernelState()
+          if (cfg.expectedCardsDigest) {
+            this.checkCardsDigest(state)
+          }
+          if (cfg.expectedCensusDigest) {
+            this.checkCensusDigest(state)
+          }
         }
       } else {
         await this.foldIndex()

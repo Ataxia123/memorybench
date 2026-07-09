@@ -468,6 +468,113 @@ describe("skip-fold mode (KERNELB_SKIP_FOLD) — search-only over a pre-folded b
     expect(calls.length).toBe(1)
     expect(calls.some((c) => c.url.includes("/kernel/index"))).toBe(false)
   })
+
+  // I-2: the census tripwire (KERNELB_EXPECTED_CENSUS_DIGEST) only ran inside
+  // foldIndex()'s fold-POST response check, so setting it in skip-fold mode
+  // was previously a total no-op — the one HTTP call skip-fold makes (the
+  // cards preflight GET) never looked at census_digest at all. These three
+  // cases pin the fix: match passes, mismatch throws, and — unchanged from
+  // before this fix — no digest configured means no preflight fetch at all.
+  test("skip-fold + KERNELB_EXPECTED_CENSUS_DIGEST: passes when GET /kernel/state census_digest matches, via the same state fetch (single HTTP call)", async () => {
+    const calls: Array<{ method: string; url: string }> = []
+    const fetchImpl: FetchLike = async (url, init) => {
+      const method = init?.method ?? "GET"
+      calls.push({ method, url })
+      if (url.includes("/kernel/state")) {
+        return new Response(JSON.stringify({ census_digest: "expected-digest" }), { status: 200 })
+      }
+      throw new Error(`unexpected fetch in test: ${method} ${url}`)
+    }
+    const provider = new BonfiresKernelProvider(
+      config({ skipFold: true, expectedCensusDigest: "expected-digest" }),
+      fetchImpl
+    )
+    const s1 = session("s1", [
+      { role: "user", content: "hi there", speaker: "Melanie", timestamp: "2023-05-08T10:00:00Z" },
+    ])
+    const result = await provider.ingest([s1], { containerTag: "q1" })
+    await expect(provider.awaitIndexing(result, "q1")).resolves.toBeUndefined()
+    expect(calls.length).toBe(1)
+    expect(calls[0]?.url).toContain("/kernel/state")
+  })
+
+  test("skip-fold + KERNELB_EXPECTED_CENSUS_DIGEST: mismatch throws — never POSTs /kernel/index", async () => {
+    const calls: Array<{ method: string; url: string }> = []
+    const fetchImpl: FetchLike = async (url, init) => {
+      const method = init?.method ?? "GET"
+      calls.push({ method, url })
+      if (url.includes("/kernel/state")) {
+        return new Response(JSON.stringify({ census_digest: "drifted-digest" }), { status: 200 })
+      }
+      throw new Error(`unexpected fetch in test: ${method} ${url}`)
+    }
+    const provider = new BonfiresKernelProvider(
+      config({ skipFold: true, expectedCensusDigest: "expected-digest" }),
+      fetchImpl
+    )
+    const s1 = session("s1", [
+      { role: "user", content: "hi there", speaker: "Melanie", timestamp: "2023-05-08T10:00:00Z" },
+    ])
+    const result = await provider.ingest([s1], { containerTag: "q1" })
+    await expect(provider.awaitIndexing(result, "q1")).rejects.toThrow(
+      /skip-fold census_digest mismatch — expected expected-digest, got drifted-digest/
+    )
+    expect(calls.length).toBe(1)
+    expect(calls.some((c) => c.url.includes("/kernel/index"))).toBe(false)
+  })
+
+  test("skip-fold + KERNELB_EXPECTED_CENSUS_DIGEST: absent field throws (treated the same as a mismatch, not a silent pass)", async () => {
+    const calls: Array<{ method: string; url: string }> = []
+    const fetchImpl: FetchLike = async (url, init) => {
+      const method = init?.method ?? "GET"
+      calls.push({ method, url })
+      if (url.includes("/kernel/state")) {
+        return new Response(JSON.stringify({}), { status: 200 })
+      }
+      throw new Error(`unexpected fetch in test: ${method} ${url}`)
+    }
+    const provider = new BonfiresKernelProvider(
+      config({ skipFold: true, expectedCensusDigest: "expected-digest" }),
+      fetchImpl
+    )
+    const s1 = session("s1", [
+      { role: "user", content: "hi there", speaker: "Melanie", timestamp: "2023-05-08T10:00:00Z" },
+    ])
+    const result = await provider.ingest([s1], { containerTag: "q1" })
+    await expect(provider.awaitIndexing(result, "q1")).rejects.toThrow(
+      /skip-fold census_digest mismatch — expected expected-digest, got \(absent from GET \/kernel\/state\)/
+    )
+    expect(calls.length).toBe(1)
+  })
+
+  test("skip-fold + both digests configured: a single shared GET /kernel/state backs both checks (no second HTTP call)", async () => {
+    const calls: Array<{ method: string; url: string }> = []
+    const fetchImpl: FetchLike = async (url, init) => {
+      const method = init?.method ?? "GET"
+      calls.push({ method, url })
+      if (url.includes("/kernel/state")) {
+        return new Response(
+          JSON.stringify({ recipe: { cards_digest: "abc123" }, census_digest: "expected-digest" }),
+          { status: 200 }
+        )
+      }
+      throw new Error(`unexpected fetch in test: ${method} ${url}`)
+    }
+    const provider = new BonfiresKernelProvider(
+      config({
+        skipFold: true,
+        expectedCardsDigest: "abc123",
+        expectedCensusDigest: "expected-digest",
+      }),
+      fetchImpl
+    )
+    const s1 = session("s1", [
+      { role: "user", content: "hi there", speaker: "Melanie", timestamp: "2023-05-08T10:00:00Z" },
+    ])
+    const result = await provider.ingest([s1], { containerTag: "q1" })
+    await expect(provider.awaitIndexing(result, "q1")).resolves.toBeUndefined()
+    expect(calls.length).toBe(1)
+  })
 })
 
 describe("search (thin HTTP mapping)", () => {
