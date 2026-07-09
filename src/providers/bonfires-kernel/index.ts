@@ -58,6 +58,24 @@ export function mapSearchEnvelope(envelope: KernelSearchEnvelope): unknown[] {
   if (envelope.directive !== null && envelope.directive !== undefined) {
     contextItem.directive = envelope.directive
   }
+  // I2: gapmap.ts::extractAffordances reads `item.recipe.affordancesFired`/
+  // `.fallback` off THIS enumerable item (JSON.stringify(items) is exactly
+  // what gets persisted to results/<id>.json) — not off the non-enumerable
+  // `.diagnostics` property search() attaches below, which JSON.stringify
+  // silently drops. The wire recipe carries snake_case
+  // `affordances_fired`; normalize to gapmap's camelCase key here (falling
+  // back to an already-camelCase key, then `[]`, in case a future kernel
+  // response sends it either way) and drop the snake_case duplicate so the
+  // echoed recipe isn't carrying both spellings.
+  if (envelope.recipe && typeof envelope.recipe === "object") {
+    const wireRecipe = envelope.recipe as Record<string, unknown>
+    const { affordances_fired, ...rest } = wireRecipe
+    contextItem.recipe = {
+      ...rest,
+      affordancesFired: affordances_fired ?? wireRecipe.affordancesFired ?? [],
+      fallback: envelope.fallback ?? false,
+    }
+  }
   return [...utterances, contextItem]
 }
 

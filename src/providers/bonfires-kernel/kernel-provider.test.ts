@@ -56,6 +56,27 @@ describe("bonfires-kernel provider mapping", () => {
       metadata: { foo: "bar" },
     })
   })
+
+  // Brief's fixture (task-7-brief.md Step 1) names the array `hits` — that's
+  // the raw wire field name, not `KernelSearchEnvelope.results` (see the
+  // interface doc comment: `search()` does that hits->results translation
+  // before calling mapSearchEnvelope). Using `results: []` here keeps this a
+  // valid KernelSearchEnvelope like every other test in this describe block;
+  // the recipe-echo behavior under test is identical either way since the
+  // array is empty.
+  test("cxn_context item carries an enumerable recipe echo the gap map can parse", async () => {
+    const envelope = {
+      results: [], context_lines: ["l1"], directive: "D",
+      recipe: { affordances_fired: ["q:strata"], fallback: false, directiveVersion: 2 },
+      fallback: false,
+    }
+    const items = mapSearchEnvelope(envelope)
+    const ctx = items.find((i) => (i as { kind?: unknown }).kind === "cxn_context") as Record<string, unknown>
+    const recipe = ctx.recipe as Record<string, unknown>
+    expect(recipe.affordancesFired).toEqual(["q:strata"])
+    expect(recipe.fallback).toBe(false)
+    expect(JSON.parse(JSON.stringify(items)).some((i: any) => i.recipe)).toBe(true)
+  })
 })
 
 describe("loadKernelConfig", () => {
