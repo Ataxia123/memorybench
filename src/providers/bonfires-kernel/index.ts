@@ -19,6 +19,7 @@ export interface KernelSearchHit {
   uuid: string
   score: number
   text: string
+  kind?: string
   metadata?: Record<string, unknown>
 }
 
@@ -33,6 +34,8 @@ export interface KernelSearchEnvelope {
   directive: string | null
   recipe: Record<string, unknown> | null
   fallback: boolean
+  kind_mix?: Record<string, unknown> | null
+  degraded?: Record<string, unknown> | null
 }
 
 /** Pure envelope -> bench result items mapping. NO retrieval logic here —
@@ -47,13 +50,22 @@ export interface KernelSearchEnvelope {
 export function mapSearchEnvelope(envelope: KernelSearchEnvelope): unknown[] {
   const utterances = envelope.results.map((hit) => ({
     text: hit.text,
-    kind: "cxn_utterance" as const,
+    // Pass the kernel's own lane kind through (edge/testimony/constructional);
+    // "cxn_utterance" is only the legacy fallback for kind-less hits. Diagnostic
+    // only — answer/eval phases never branch on kind.
+    kind: hit.kind ?? "cxn_utterance",
     score: hit.score,
     metadata: hit.metadata ?? {},
   }))
   const contextItem: Record<string, unknown> = {
     kind: "cxn_context",
     lines: envelope.context_lines,
+  }
+  if (envelope.kind_mix !== null && envelope.kind_mix !== undefined) {
+    contextItem.kind_mix = envelope.kind_mix
+  }
+  if (envelope.degraded !== null && envelope.degraded !== undefined) {
+    contextItem.degraded = envelope.degraded
   }
   if (envelope.directive !== null && envelope.directive !== undefined) {
     contextItem.directive = envelope.directive
@@ -103,6 +115,8 @@ interface KernelSearchResponseWire {
   directive?: string | null
   recipe?: Record<string, unknown> | null
   fallback?: boolean | null
+  kind_mix?: Record<string, unknown> | null
+  degraded?: Record<string, unknown> | null
 }
 
 /** Wire shape of `POST /bonfires/{id}/kernel/index` for the cxn-fold path
@@ -371,6 +385,8 @@ export class BonfiresKernelProvider implements Provider {
       directive: wire.directive ?? null,
       recipe: wire.recipe ?? null,
       fallback: wire.fallback ?? false,
+      kind_mix: wire.kind_mix ?? null,
+      degraded: wire.degraded ?? null,
     }
     const items = mapSearchEnvelope(envelope)
     // Recipe echo -> per-question diagnostics side channel (mirrors the
