@@ -282,7 +282,11 @@ function buildAnswerPromptCore(
   for (const item of context) {
     if (!item || typeof item !== "object") continue
     const record = item as Record<string, unknown>
-    if (record.kind === "cxn_utterance" && typeof record.text === "string") utterances.push(record.text)
+    // Kind-agnostic evidence: the kernel serves edge/testimony/constructional
+    // kinds besides cxn_utterance (the harness used to relabel them all —
+    // fixed 08-28). Anything with text EXCEPT the cxn_context carrier is
+    // evidence; keying on one kind would silently drop the graph lane.
+    if (record.kind !== "cxn_context" && typeof record.text === "string") utterances.push(record.text)
     if (record.kind === "cxn_context" && Array.isArray(record.lines)) {
       for (const line of record.lines) contextLines.push(String(line))
       if (honorDirectives && !directive && typeof record.directive === "string" && record.directive.length > 0) {
