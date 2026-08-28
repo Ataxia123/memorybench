@@ -279,6 +279,11 @@ function buildAnswerPromptCore(
   const utterances: string[] = []
   const contextLines: string[] = []
   let directive: string | null = null
+  // Hits hydrate from `metadata.source_text` (the actual conversation line a
+  // graph/testimony triple was extracted from) — multiple triples routinely
+  // hydrate to the SAME source_text (one utterance, several edges), so
+  // dedupe on that string to avoid rendering the same evidence line N times.
+  const seenSourceTexts = new Set<string>()
   for (const item of context) {
     if (!item || typeof item !== "object") continue
     const record = item as Record<string, unknown>
@@ -286,7 +291,32 @@ function buildAnswerPromptCore(
     // kinds besides cxn_utterance (the harness used to relabel them all —
     // fixed 08-28). Anything with text EXCEPT the cxn_context carrier is
     // evidence; keying on one kind would silently drop the graph lane.
-    if (record.kind !== "cxn_context" && typeof record.text === "string") utterances.push(record.text)
+    if (record.kind !== "cxn_context") {
+      const metadata =
+        record.metadata && typeof record.metadata === "object"
+          ? (record.metadata as Record<string, unknown>)
+          : undefined
+      const sourceText = typeof metadata?.source_text === "string" ? metadata.source_text : undefined
+      if (sourceText) {
+        if (!seenSourceTexts.has(sourceText)) {
+          seenSourceTexts.add(sourceText)
+          const validAt = typeof metadata?.valid_at === "string" ? metadata.valid_at : undefined
+          const speaker =
+            typeof metadata?.source_name === "string"
+              ? metadata.source_name
+              : typeof metadata?.speaker === "string"
+                ? metadata.speaker
+                : undefined
+          const stampParts = [validAt ? formatStamp(validAt) : null, speaker ?? null].filter(
+            (part): part is string => Boolean(part)
+          )
+          const stamp = stampParts.length > 0 ? `[${stampParts.join(" ")}] ` : ""
+          utterances.push(`${stamp}${sourceText}`)
+        }
+      } else if (typeof record.text === "string") {
+        utterances.push(record.text)
+      }
+    }
     if (record.kind === "cxn_context" && Array.isArray(record.lines)) {
       for (const line of record.lines) contextLines.push(String(line))
       if (honorDirectives && !directive && typeof record.directive === "string" && record.directive.length > 0) {

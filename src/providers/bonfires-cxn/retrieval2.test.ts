@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import {
-  applyTemporalBoost, blendScores, bm25Scores, buildAnswerPromptV2, buildBm25,
+  applyTemporalBoost, blendScores, bm25Scores, buildAnswerPromptV2, buildAnswerPromptV3, buildBm25,
   denseScores, hydrationLines, isAskShape, lanePBoost, mmrSelect, replyExpansion,
   temporalWindow, type StatementEntry,
 } from "./retrieval2"
@@ -136,6 +136,64 @@ describe("answer prompt v2", () => {
     expect(prompt).toContain("before")
     expect(prompt).toContain("When?")
     expect(prompt).toContain("2023-07-01")
+  })
+})
+
+describe("answer prompt evidence rendering (source_text)", () => {
+  test("hit with metadata.source_text renders '[valid_at speaker] source_text' instead of the triple text", () => {
+    const context = [
+      {
+        kind: "edge",
+        text: "Caroline get support",
+        metadata: {
+          source_text: "Caroline, so glad you got the support!",
+          valid_at: "2023-07-12T16:40:00Z",
+          source_name: "Caroline",
+        },
+      },
+    ]
+    const prompt = buildAnswerPromptV3("Who got support?", context)
+    expect(prompt).toContain("[2023-07-12 16:40 Caroline] Caroline, so glad you got the support!")
+    expect(prompt).not.toContain("Caroline get support")
+  })
+
+  test("multiple hits hydrating to the SAME source_text render once (dedupe)", () => {
+    const context = [
+      {
+        kind: "edge", text: "Caroline get support",
+        metadata: { source_text: "Same underlying line.", valid_at: "2023-07-12T16:40:00Z", source_name: "Caroline" },
+      },
+      {
+        kind: "edge", text: "Caroline express gratitude",
+        metadata: { source_text: "Same underlying line.", valid_at: "2023-07-12T16:40:00Z", source_name: "Caroline" },
+      },
+    ]
+    const prompt = buildAnswerPromptV3("What happened?", context)
+    const occurrences = prompt.split("Same underlying line.").length - 1
+    expect(occurrences).toBe(1)
+  })
+
+  test("hit with no metadata.source_text falls back to record.text", () => {
+    const context = [
+      { kind: "constructional", text: "[2023-05-08 13:56 Caroline] Early thing.", metadata: { actor_id: "Caroline" } },
+    ]
+    const prompt = buildAnswerPromptV3("When?", context)
+    expect(prompt).toContain("[2023-05-08 13:56 Caroline] Early thing.")
+  })
+
+  test("source_text with no valid_at/speaker in metadata renders unstamped", () => {
+    const context = [{ kind: "edge", text: "x", metadata: { source_text: "Bare line, no stamp fields." } }]
+    const prompt = buildAnswerPromptV3("Q?", context)
+    expect(prompt).toContain("Bare line, no stamp fields.")
+    expect(prompt).not.toContain("[undefined")
+  })
+
+  test("metadata.speaker is used when source_name is absent", () => {
+    const context = [
+      { kind: "testimony", text: "x", metadata: { source_text: "Spoke via testimony lane.", valid_at: "2023-05-08T13:56:00Z", speaker: "Melanie" } },
+    ]
+    const prompt = buildAnswerPromptV3("Q?", context)
+    expect(prompt).toContain("[2023-05-08 13:56 Melanie] Spoke via testimony lane.")
   })
 })
 

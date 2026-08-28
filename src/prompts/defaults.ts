@@ -79,10 +79,22 @@ Respond with ONLY a JSON object:
 {"score": 1, "label": "correct", "explanation": "..."} if the response satisfies the rubric
 {"score": 0, "label": "incorrect", "explanation": "..."} if the response does not satisfy the rubric`
 
-export function getJudgePromptForType(questionType: string): string {
+export function getJudgePromptForType(questionType: string, groundTruth?: string): string {
   const type = questionType.toLowerCase()
 
-  if (type.includes("abstention") || type.includes("adversarial")) {
+  // Real-GT guard: LoCoMo mints groundTruth via `String(qa.answer)` (locomo/index.ts),
+  // so an unanswerable adversarial question has groundTruth === "undefined" (no
+  // `answer` field on the source item) while an adversarial question with a real
+  // answer (e.g. "No") carries an actual string. ABSTENTION_JUDGE_PROMPT can only
+  // score "did the system abstain" — routing a real-GT question through it makes a
+  // correct concrete answer unscorable (q167/q178: answered "No" correctly, scored
+  // incorrect because the judge only checks for abstention language). Only route to
+  // the abstention prompt when there is no real ground truth to check the answer
+  // against. `groundTruth` is optional here (callers that never had it to pass keep
+  // their old type-only routing) — the guard only fires when a real value is present
+  // and it is literally the "undefined" sentinel.
+  const hasRealGroundTruth = groundTruth !== undefined && groundTruth !== "undefined"
+  if ((type.includes("abstention") || type.includes("adversarial")) && !hasRealGroundTruth) {
     return ABSTENTION_JUDGE_PROMPT
   }
 

@@ -5,6 +5,8 @@ import { join } from "node:path"
 import { BonfiresKernelProvider, mapSearchEnvelope, type FetchLike } from "./index"
 import { loadKernelConfig, type KernelConfig } from "./config"
 import type { UnifiedSession } from "../../types/unified"
+import { buildZepJudgePrompt } from "../zep/prompts"
+import { getJudgePromptForType, ABSTENTION_JUDGE_PROMPT, DEFAULT_JUDGE_PROMPT } from "../../prompts/defaults"
 
 describe("bonfires-kernel provider mapping", () => {
   test("envelope maps to utterances + one context item carrying the directive", () => {
@@ -642,5 +644,44 @@ describe("clear", () => {
     }
     const provider = new BonfiresKernelProvider(config(), fetchImpl)
     await provider.clear("anything")
+  })
+})
+
+// Judge parity (task brief step 1): every historic baseline (118/152 floor and
+// prior) was judged with the lenient prompt. buildJudgePrompt (judges/base.ts)
+// checks providerPrompts.judgePrompt FIRST, before ever consulting the
+// STRICT/type-routed default — so wiring this in also means the ABSTENTION
+// routing bug below never fires for kernel-provider runs going forward
+// (prompts.default is used unconditionally, per-type routing never runs).
+describe("judgePrompt wired (judge parity)", () => {
+  test("provider.prompts.judgePrompt is the lenient/zep judge builder", () => {
+    const provider = new BonfiresKernelProvider(config())
+    expect(provider.prompts.judgePrompt).toBe(buildZepJudgePrompt)
+  })
+
+  test("wired judgePrompt produces the lenient grading prompt shape", () => {
+    const provider = new BonfiresKernelProvider(config())
+    const result = provider.prompts.judgePrompt!("Q?", "A shell necklace", "a necklace made of shells")
+    expect(result.default).toContain("generous with your grading")
+    expect(result.default).toContain("Gold answer: A shell necklace")
+  })
+})
+
+// Judge routing guard (task brief step 2a): defaults.ts's STRICT fallback path
+// (only reached when a provider does NOT set providerPrompts.judgePrompt) must
+// not route a real-ground-truth adversarial question to ABSTENTION_JUDGE_PROMPT
+// — that prompt can only score "did the system abstain", making a correct
+// concrete answer (q167/q178: "No") structurally unscorable.
+describe("real-GT adversarial routing guard (getJudgePromptForType)", () => {
+  test("unanswerable adversarial (groundTruth 'undefined' sentinel) still routes to ABSTENTION", () => {
+    expect(getJudgePromptForType("adversarial", "undefined")).toBe(ABSTENTION_JUDGE_PROMPT)
+  })
+
+  test("real-GT adversarial (e.g. 'No') routes to the default judge prompt, not ABSTENTION", () => {
+    expect(getJudgePromptForType("adversarial", "No")).toBe(DEFAULT_JUDGE_PROMPT)
+  })
+
+  test("callers that never pass groundTruth keep the old type-only routing", () => {
+    expect(getJudgePromptForType("adversarial")).toBe(ABSTENTION_JUDGE_PROMPT)
   })
 })

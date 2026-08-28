@@ -11,6 +11,16 @@ import type { UnifiedSession } from "../../types/unified"
 import { logger } from "../../utils/logger"
 import { loadKernelConfig, type KernelConfig } from "./config"
 import { buildAnswerPromptV3 } from "../bonfires-cxn/retrieval2"
+// Judge parity: every historic baseline (118/152 floor and prior) was judged
+// with the lenient prompt (bonfires provider default, buildLenientLocomoJudgePrompt
+// in ../bonfires/index.ts:625, byte-identical to this one) — the STRICT
+// default (judges/base.ts) was never wired for this provider until now, which
+// made the 08-28 smoke run's 99/152 incomparable to those baselines. Import
+// buildZepJudgePrompt rather than duplicating the prompt text; it and
+// buildLenientLocomoJudgePrompt are the same string, this is just the
+// import that isn't entangled with the bonfires provider's
+// BONFIRES_JUDGE_PROMPT env-var switch.
+import { buildZepJudgePrompt } from "../zep/prompts"
 
 export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>
 
@@ -168,7 +178,7 @@ function sessionToMessageBatch(session: UnifiedSession): Array<Record<string, un
 export class BonfiresKernelProvider implements Provider {
   name = "bonfires-kernel"
   concurrency = { default: 5, ingest: 1 }
-  prompts = { answerPrompt: buildAnswerPromptV3 }
+  prompts = { answerPrompt: buildAnswerPromptV3, judgePrompt: buildZepJudgePrompt }
 
   private cfg: KernelConfig | null
   private fetchImpl: FetchLike
