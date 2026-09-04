@@ -33,12 +33,25 @@ export interface KernelConfig {
   // silently scoring against the wrong artifact. Default false (normal fold
   // path, unchanged).
   skipFold: boolean
+  // KERNELB_TOP_K: hits requested per search (server caps at 100). 20 = every prior
+  // kernel-lane number (matched-recipe law); widen ONLY as a named lever, reported with the number.
+  topK: number
 }
 
 function required(env: Record<string, string | undefined>, key: string): string {
   const value = env[key]?.trim()
   if (!value) throw new Error(`bonfires-kernel: missing required env ${key}`)
   return value
+}
+
+function optionalInt(env: Record<string, string | undefined>, key: string, fallback: number): number {
+  const raw = env[key]?.trim()
+  if (!raw) return fallback
+  const n = Number.parseInt(raw, 10)
+  if (!Number.isInteger(n) || n < 1 || n > 100) {
+    throw new Error(`bonfires-kernel: ${key} must be an integer in [1, 100], got "${raw}"`)
+  }
+  return n
 }
 
 function optionalBool(
@@ -68,5 +81,6 @@ export function loadKernelConfig(
     batchesPath: env.KERNELB_BATCHES_PATH?.trim() || undefined,
     expectedCensusDigest: env.KERNELB_EXPECTED_CENSUS_DIGEST?.trim() || undefined,
     skipFold: optionalBool(env, "KERNELB_SKIP_FOLD", false),
+    topK: optionalInt(env, "KERNELB_TOP_K", 20),
   }
 }

@@ -383,7 +383,7 @@ export class BonfiresKernelProvider implements Provider {
     const response = await this.fetchImpl(`${cfg.apiUrl}/bonfires/${cfg.bonfireId}/kernel/search`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Internal-Token": cfg.apiKey },
-      body: JSON.stringify({ query, top_k: 20 }),
+      body: JSON.stringify({ query, top_k: cfg.topK }),
     })
     if (!response.ok) {
       throw new Error(`bonfires-kernel: POST /kernel/search failed (${response.status})`)

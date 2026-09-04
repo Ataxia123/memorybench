@@ -157,6 +157,7 @@ function config(overrides: Partial<KernelConfig> = {}): KernelConfig {
     apiKey: "k1",
     actorId: "bench",
     skipFold: false,
+    topK: 20,
     ...overrides,
   }
 }
@@ -590,6 +591,7 @@ describe("skip-fold mode (KERNELB_SKIP_FOLD) — search-only over a pre-folded b
     const provider = new BonfiresKernelProvider(
       config({
         skipFold: true,
+        topK: 20,
         expectedCardsDigest: "abc123",
         expectedCensusDigest: "expected-digest",
       }),
