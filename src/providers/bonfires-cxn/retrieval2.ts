@@ -282,11 +282,19 @@ function buildAnswerPromptCore(
   // Hits hydrate from `metadata.source_text` (the actual conversation line a
   // graph/testimony triple was extracted from) — multiple triples routinely
   // hydrate to the SAME source_text (one utterance, several edges), so
-  // dedupe on that string to avoid rendering the same evidence line N times.
+  // Deduplicate identical evidence, retaining distinct times and reply bindings.
   const seenSourceTexts = new Set<string>()
-  for (const item of context) {
-    if (!item || typeof item !== "object") continue
-    const record = item as Record<string, unknown>
+  const activeAnswers = new WeakSet<object>()
+  function renderEvidence(record: Record<string, unknown>, replyTo?: string, depth = 0): void {
+    if (depth > 64) throw new Error("Kernel answer evidence exceeds nesting limit (64)")
+    if (activeAnswers.has(record)) throw new Error("Cyclic kernel answer evidence")
+    activeAnswers.add(record)
+    const firstLine = utterances.length
+    const temporal = record.temporal && typeof record.temporal === "object"
+      ? record.temporal as Record<string, unknown> : undefined
+    const timeParts = ["iso", "relative", "source", "first_fired", "last_fired"]
+      .filter((key) => typeof temporal?.[key] === "string" && temporal[key] !== "")
+      .map((key) => `${key}=${temporal![key]}`)
     // Kind-agnostic evidence: the kernel serves edge/testimony/constructional
     // kinds besides cxn_utterance (the harness used to relabel them all —
     // fixed 08-28). Anything with text EXCEPT the cxn_context carrier is
@@ -298,8 +306,9 @@ function buildAnswerPromptCore(
           : undefined
       const sourceText = typeof metadata?.source_text === "string" ? metadata.source_text : undefined
       if (sourceText) {
-        if (!seenSourceTexts.has(sourceText)) {
-          seenSourceTexts.add(sourceText)
+        const evidenceKey = JSON.stringify([sourceText, replyTo ?? null, timeParts])
+        if (!seenSourceTexts.has(evidenceKey)) {
+          seenSourceTexts.add(evidenceKey)
           const validAt = typeof metadata?.valid_at === "string" ? metadata.valid_at : undefined
           const speaker =
             typeof metadata?.source_name === "string"
@@ -317,6 +326,28 @@ function buildAnswerPromptCore(
         utterances.push(record.text)
       }
     }
+    const answers = Array.isArray(record.answers) ? record.answers : []
+    const metadata = record.metadata && typeof record.metadata === "object"
+      ? record.metadata as Record<string, unknown> : undefined
+    const parentText = typeof metadata?.source_text === "string"
+      ? metadata.source_text : String(record.text ?? "")
+    if (utterances.length > firstLine) {
+      const binding = replyTo ? `[reply to ${JSON.stringify(replyTo)}] ` : ""
+      const stamp = timeParts.length > 0 ? ` [temporal: ${timeParts.join("; ")}]` : ""
+      utterances[firstLine] = `${binding}${utterances[firstLine]}${stamp}`
+    }
+    // A duplicate parent source must not hide separately bound replies.
+    for (const answer of answers) {
+      if (answer && typeof answer === "object") {
+        renderEvidence(answer as Record<string, unknown>, parentText, depth + 1)
+      }
+    }
+    activeAnswers.delete(record)
+  }
+  for (const item of context) {
+    if (!item || typeof item !== "object") continue
+    const record = item as Record<string, unknown>
+    renderEvidence(record)
     if (record.kind === "cxn_context" && Array.isArray(record.lines)) {
       for (const line of record.lines) contextLines.push(String(line))
       if (honorDirectives && !directive && typeof record.directive === "string" && record.directive.length > 0) {

@@ -52,10 +52,50 @@ describe("bonfires-kernel provider mapping", () => {
       fallback: false,
     })
     expect(items[0]).toEqual({
+      uuid: "h2",
       text: "hi",
       kind: "cxn_utterance",
       score: 0.5,
       metadata: { foo: "bar" },
+    })
+  })
+
+  test("wire evidence survives JSON persistence with temporal provenance and nested replies", () => {
+    const hit = {
+      uuid: "event-1",
+      score: 0.8,
+      text: "Caroline did not thank Mara.",
+      kind: "edge",
+      family: "event",
+      episode_ids: ["episode-1"],
+      temporal: { iso: "2023-05-01", source: "statement", relative: null },
+      metadata: {
+        predicate: "thank",
+        polarity: "negative",
+        participants: { agent: "Caroline", recipient: "Mara" },
+        source_text: "I did not thank Mara.",
+      },
+      answers: [{
+        uuid: "reply-1", score: 0.7, text: "Why?", kind: "testimony",
+        temporal: null,
+        metadata: { reply_to: { bound: true, uuid: "event-1" } },
+        answers: [{
+          uuid: "reply-2", score: 0.6, text: "She had already left.",
+          temporal: { iso: "2023-05-02", source: "statement" },
+          metadata: { source_name: "Caroline" },
+        }],
+      }],
+    }
+    const items = mapSearchEnvelope({
+      results: [hit], context_lines: ["context"], directive: "Use the evidence",
+      recipe: null, fallback: false,
+      degraded: { event: "incomplete" }, kind_mix: { edge: 1 },
+    })
+    const persisted = JSON.parse(JSON.stringify(items))
+    expect(persisted[0]).toEqual(hit)
+    expect(persisted[1]).toEqual({
+      kind: "cxn_context", lines: ["context"], directive: "Use the evidence",
+      degraded: { event: "incomplete" }, kind_mix: { edge: 1 },
     })
   })
 
@@ -628,6 +668,7 @@ describe("search (thin HTTP mapping)", () => {
     expect(capturedBody).toEqual({ query: "what happened?", top_k: 20 })
     expect(results.length).toBe(2)
     expect(results[0]).toEqual({
+      uuid: "h1",
       text: "hello",
       kind: "cxn_utterance",
       score: 0.8,

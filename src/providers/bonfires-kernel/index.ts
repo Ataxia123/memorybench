@@ -30,6 +30,10 @@ export interface KernelSearchHit {
   score: number
   text: string
   kind?: string
+  family?: string
+  episode_ids?: string[]
+  temporal?: Record<string, unknown> | null
+  answers?: KernelSearchHit[]
   metadata?: Record<string, unknown>
 }
 
@@ -51,14 +55,15 @@ export interface KernelSearchEnvelope {
 /** Pure envelope -> bench result items mapping. NO retrieval logic here —
  * every score/rank/text was already decided server-side by the kernel's
  * `/kernel/search` route; this only reshapes the wire envelope into the
- * `{text, kind, score, metadata}` item shape the harness (and
- * `buildAnswerPromptV3`) expect, plus one `cxn_context` item carrying the
+ * evidence item shape the harness expects without dropping wire provenance
+ * or nested replies, plus one `cxn_context` item carrying the
  * hydration lines + answer directive. The `directive` key is OMITTED
  * (not set to `undefined`) when the envelope's directive is null/absent —
  * `buildAnswerPromptV3` and the harness's checkpoint slimming both branch on
  * key presence, not truthiness. */
 export function mapSearchEnvelope(envelope: KernelSearchEnvelope): unknown[] {
   const utterances = envelope.results.map((hit) => ({
+    ...hit,
     text: hit.text,
     // Pass the kernel's own lane kind through (edge/testimony/constructional);
     // "cxn_utterance" is only the legacy fallback for kind-less hits. Diagnostic
