@@ -10,7 +10,7 @@ import type {
 import type { UnifiedSession } from "../../types/unified"
 import { logger } from "../../utils/logger"
 import { loadKernelConfig, type KernelConfig } from "./config"
-import { buildAnswerPromptV3 } from "../bonfires-cxn/retrieval2"
+import { buildKernelAnswerPrompt } from "./prompts"
 // Judge parity: every historic baseline (118/152 floor and prior) was judged
 // with the lenient prompt (bonfires provider default, buildLenientLocomoJudgePrompt
 // in ../bonfires/index.ts:625, byte-identical to this one) — the STRICT
@@ -183,7 +183,7 @@ function sessionToMessageBatch(session: UnifiedSession): Array<Record<string, un
 export class BonfiresKernelProvider implements Provider {
   name = "bonfires-kernel"
   concurrency = { default: 5, ingest: 1 }
-  prompts = { answerPrompt: buildAnswerPromptV3, judgePrompt: buildZepJudgePrompt }
+  prompts = { answerPrompt: buildKernelAnswerPrompt, judgePrompt: buildZepJudgePrompt }
 
   private cfg: KernelConfig | null
   private fetchImpl: FetchLike

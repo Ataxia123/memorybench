@@ -274,7 +274,8 @@ export function hydrationLines(
 // ---------- answer prompt ----------
 
 function buildAnswerPromptCore(
-  question: string, context: unknown[], questionDate: string | undefined, honorDirectives: boolean
+  question: string, context: unknown[], questionDate: string | undefined, honorDirectives: boolean,
+  omitStatementCreatedAtAnnotation = false
 ): string {
   const utterances: string[] = []
   const contextLines: string[] = []
@@ -333,7 +334,9 @@ function buildAnswerPromptCore(
       ? metadata.source_text : String(record.text ?? "")
     if (utterances.length > firstLine) {
       const binding = replyTo ? `[reply to ${JSON.stringify(replyTo)}] ` : ""
-      const stamp = timeParts.length > 0 ? ` [temporal: ${timeParts.join("; ")}]` : ""
+      // Hide ingestion fallback only at display time; its timestamp still distinguishes occurrences.
+      const omitStamp = omitStatementCreatedAtAnnotation && temporal?.source === "statement_created_at"
+      const stamp = !omitStamp && timeParts.length > 0 ? ` [temporal: ${timeParts.join("; ")}]` : ""
       utterances[firstLine] = `${binding}${utterances[firstLine]}${stamp}`
     }
     // A duplicate parent source must not hide separately bound replies.
@@ -375,6 +378,9 @@ export function buildAnswerPromptV2(question: string, context: unknown[], questi
   return buildAnswerPromptCore(question, context, questionDate, false)
 }
 
-export function buildAnswerPromptV3(question: string, context: unknown[], questionDate?: string): string {
-  return buildAnswerPromptCore(question, context, questionDate, true)
+export function buildAnswerPromptV3(
+  question: string, context: unknown[], questionDate?: string,
+  options: { omitStatementCreatedAtAnnotation?: boolean } = {}
+): string {
+  return buildAnswerPromptCore(question, context, questionDate, true, options.omitStatementCreatedAtAnnotation)
 }
