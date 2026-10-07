@@ -56,3 +56,4 @@ export type ProviderName =
   | "bonfires"
   | "bonfires-cxn"
   | "bonfires-kernel"
+  | "bonfires-graph-ctx"
