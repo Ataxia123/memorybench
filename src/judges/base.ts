@@ -16,7 +16,7 @@ export function buildJudgePrompt(input: JudgeInput): string {
     return prompts[input.questionType] ?? prompts.default
   }
 
-  const systemPrompt = getJudgePromptForType(input.questionType)
+  const systemPrompt = getJudgePromptForType(input.questionType, input.groundTruth)
   const isPreference = input.questionType.toLowerCase().includes("preference")
   const groundTruthLabel = isPreference ? "Rubric" : "Ground Truth Answer"
 

@@ -6,6 +6,7 @@ export interface JudgeConfig {
 }
 
 export interface JudgeInput {
+  runId?: string
   question: string
   /** Raw question type from benchmark (e.g., "1", "single-session-user", "user_evidence") */
   questionType: string

@@ -6,6 +6,9 @@ import { ZepProvider } from "./zep"
 import { FilesystemProvider } from "./filesystem"
 import { RAGProvider } from "./rag"
 import { BonfiresProvider } from "./bonfires/index.js"
+import { BonfiresCxnProvider } from "./bonfires-cxn/index.js"
+import { BonfiresKernelProvider } from "./bonfires-kernel/index.js"
+import { BonfiresGraphCtxProvider } from "./bonfires-graph-ctx/index.js"
 
 const providers: Record<ProviderName, new () => Provider> = {
   supermemory: SupermemoryProvider,
@@ -14,6 +17,9 @@ const providers: Record<ProviderName, new () => Provider> = {
   filesystem: FilesystemProvider,
   rag: RAGProvider,
   bonfires: BonfiresProvider,
+  "bonfires-cxn": BonfiresCxnProvider,
+  "bonfires-kernel": BonfiresKernelProvider,
+  "bonfires-graph-ctx": BonfiresGraphCtxProvider,
 }
 
 export function createProvider(name: ProviderName): Provider {
@@ -41,4 +47,14 @@ export function getProviderInfo(name: ProviderName): {
   }
 }
 
-export { SupermemoryProvider, Mem0Provider, ZepProvider, FilesystemProvider, RAGProvider, BonfiresProvider }
+export {
+  SupermemoryProvider,
+  Mem0Provider,
+  ZepProvider,
+  FilesystemProvider,
+  RAGProvider,
+  BonfiresProvider,
+  BonfiresCxnProvider,
+  BonfiresKernelProvider,
+  BonfiresGraphCtxProvider,
+}

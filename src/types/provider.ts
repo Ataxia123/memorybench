@@ -47,4 +47,13 @@ export interface Provider {
   clear(containerTag: string): Promise<void>
 }
 
-export type ProviderName = "supermemory" | "mem0" | "zep" | "filesystem" | "rag" | "bonfires"
+export type ProviderName =
+  | "supermemory"
+  | "mem0"
+  | "zep"
+  | "filesystem"
+  | "rag"
+  | "bonfires"
+  | "bonfires-cxn"
+  | "bonfires-kernel"
+  | "bonfires-graph-ctx"
